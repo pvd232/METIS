@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "medit-uml"
+version = "0.1.0"
+description = "MEDIT — single-cell preprocessing pipeline for manifold / diffusion models"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Keep this aligned with env.yml, but we *don’t* put GPU-specific bits here.
+dependencies = [
+  "numpy",
+  "pandas",
+  "scipy<1.13",
+  "scikit-learn",
+  "anndata",
+  "scanpy>=1.9",
+  "h5py",
+  "pyarrow",
+  "numba",
+  "umap-learn",
+  "leidenalg",
+  "statsmodels",
+  "matplotlib",
+  "seaborn",
+  "scikit-misc",
+  "phate",
+  "rich",
+  "tqdm",
+  "scvi-tools",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy",
+  "types-requests",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["medit*"]
