@@ -47,9 +47,9 @@ eggfm_diffmap:
   energy_clip_abs: 3.0
   energy_batch_size: 2048
 
-  # Hessian mixing hyperparams
-  hessian_mix_mode: "none"   # "additive" | "multiplicative" | "none"
-  hessian_mix_alpha: 0.3
-  hessian_beta: 0.2
-  hessian_clip_std: 2.0
-  hessian_use_neg: true
+  # # Hessian mixing hyperparams
+  # hessian_mix_mode: "none"   # "additive" | "multiplicative" | "none"
+  # hessian_mix_alpha: 0.3
+  # hessian_beta: 0.2
+  # hessian_clip_std: 2.0
+  # hessian_use_neg: true
