@@ -36,7 +36,7 @@ class AnnDataViewProvider:
         if self.geometry_source == "pca":
             if self.pca_key not in ad.obsm:
                 # Lazily compute PCA if missing
-                n_comps = min(20, ad.n_vars)
+                n_comps = min(30, ad.n_vars)
                 print(
                     f"[AnnDataViewProvider] 'X_pca' not found; "
                     f"computing PCA in-memory with n_comps={n_comps}",

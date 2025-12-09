@@ -1,86 +1,82 @@
-# EnergyMLP.py
+from __future__ import annotations
 
-from typing import Sequence, Optional
+from typing import Sequence
+
 import torch
 from torch import nn
 
 
 class EnergyMLP(nn.Module):
     """
-    E(x) = <E_theta(x), x> where E_theta is an MLP with nonlinearities.
+    MLP energy model with an optional latent bottleneck.
 
-    x is HVG, log-normalized expression (optionally mean-centered).
+    If `latent_dim` is provided, the network is:
 
-    We also expose a latent representation z(x) from the last hidden layer,
-    which can be used as a geometry for manifold learning.
+        x → hidden MLP → z (latent_dim) → scalar energy
+
+    and `encode(x)` returns `z`.
+
+    If `latent_dim` is None, the last hidden layer is used as the "latent"
+    (so `encode` still works), and energy is predicted directly from it.
     """
 
     def __init__(
         self,
         n_genes: int,
-        hidden_dims: Sequence[int] = (512, 512, 512, 512),
-        activation: Optional[nn.Module] = None,
-    ):
+        hidden_dims: Sequence[int],
+        latent_dim: int | None = None,
+    ) -> None:
         super().__init__()
-        if activation is None:
-            activation = nn.Softplus()
 
-        layers = []
         in_dim = n_genes
+        layers: list[nn.Module] = []
+
         for h in hidden_dims:
             layers.append(nn.Linear(in_dim, h))
-            layers.append(activation)
+            layers.append(nn.SiLU())
             in_dim = h
 
-        # encoder: maps x → z in R^{hidden_dims[-1]}
-        self.hidden = nn.Sequential(*layers)
+        self.backbone = nn.Sequential(*layers)
 
-        # head: maps z → v(x) in R^{D} (D = n_genes)
-        self.vector_head = nn.Linear(in_dim, n_genes)
+        # Optional bottleneck
+        self._has_latent = latent_dim is not None
+        if latent_dim is not None:
+            self.latent_dim = int(latent_dim)
+            self.latent_layer = nn.Linear(in_dim, self.latent_dim)
+            head_in = self.latent_dim
+        else:
+            # "latent" is just the last hidden layer
+            self.latent_dim = in_dim
+            self.latent_layer = None  # type: ignore[assignment]
+            head_in = in_dim
 
-        # store for convenience
-        self.n_genes = n_genes
-        self.latent_dim = in_dim
+        # Final energy head
+        self.energy_head = nn.Linear(head_in, 1)
+
+    # ----- core API -----
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Standard forward used in training:
-          x: (B, D)
-          returns: energy (B,)
+        Compute scalar energy E(x).
+
+        Returns shape: [B] (squeezed last dimension).
         """
-        if x.dim() == 1:
-            x = x.unsqueeze(0)
+        h = self.backbone(x)
+        if self._has_latent:
+            z = self.latent_layer(h)
+        else:
+            z = h
+        E = self.energy_head(z).squeeze(-1)
+        return E
 
-        z = self.hidden(x)               # (B, latent_dim)
-        v = self.vector_head(z)          # (B, D)
-        energy = (v * x).sum(dim=-1)     # <v(x), x>
-        return energy
-
-    @torch.no_grad()
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Return latent representation z(x) from the last hidden layer.
-        x: (B, D)
-        returns: z (B, latent_dim)
-        """
-        if x.dim() == 1:
-            x = x.unsqueeze(0)
-        z = self.hidden(x)
-        return z
+        Compute latent representation z(x).
 
-    def score(self, x: torch.Tensor) -> torch.Tensor:
+        - If latent_dim is set, returns the bottleneck output.
+        - Otherwise returns the final hidden layer.
         """
-        score(x) ≈ ∇_x log p(x) = -∇_x E(x)
-        """
-        x = x.clone().detach().requires_grad_(True)
-        energy = self.forward(x)  # (B,)
-        energy_sum = energy.sum()
-        (grad,) = torch.autograd.grad(
-            energy_sum,
-            x,
-            create_graph=False,
-            retain_graph=False,
-            only_inputs=True,
-        )
-        score = -grad
-        return score
+        h = self.backbone(x)
+        if self._has_latent:
+            return self.latent_layer(h)
+        return h

@@ -8,29 +8,33 @@ This script compares:
   - EGGFM-based diffusion map (using an energy prior)
 
 It:
-  - optionally subsamples cells for speed
+  - optionally subsamples cells for speed (with a hard cap of 60000)
   - computes PCA (if missing) and a PCA-based diffusion map
   - builds an EGGFM-based diffusion embedding via `EGGFMDiffusionEngine`
   - stores:
-      * X_diff_pca      (PCA-based diffusion map, first k dims)
+      * X_pca          (PCA embedding)
+      * X_diff_pca     (PCA-based diffusion map, first k dims)
       * X_eggfm_diffmap (full EGGFM-based diffusion embedding)
-      * X_diff_eggfm    (first k dims of EGGFM diffusion embedding)
-  - writes three .h5ad files:
-      * <stem>.h5ad                 (combined embeddings; path = --out)
-      * <stem>_pca_diffmap.h5ad     (PCA→Diffmap only)
-      * <stem>_eggfm_diffmap.h5ad   (EGGFM→Diffmap only)
+      * X_diff_eggfm   (first k dims of EGGFM diffusion embedding)
+  - writes two .h5ad files inside the embedding output directory:
+      * weinreb_eggfm_diffmap.h5ad   (full AnnData with all views)
+      * weinreb_pca_diffmap.h5ad     (PCA→Diffmap views only)
+
+Config block (in configs/params.yml):
+
+embedding:
+  ad_path: data/interim/weinreb_qc.h5ad
+  energy_ckpt: out/models/eggfm/eggfm_energy_weinreb.pt
+  out_dir: data/interim/embedding
+  k: 30
+  n_neighbors: 30
+  n_cells_sample: 0   # 0 or missing => use all cells (subject to hard cap)
+  seed: 7
+  cfg_key: eggfm_diffmap
 
 Usage:
 
-  python scripts/embedding.py \\
-      --params configs/params.yml \\
-      --ad data/interim/weinreb_qc.h5ad \\
-      --energy-ckpt out/models/eggfm/eggfm_energy_weinreb.pt \\
-      --out data/interim/weinreb_embedding.h5ad \\
-      --k 10 \\
-      --n-neighbors 30 \\
-      --n-cells-sample 5000 \\
-      --seed 7
+  python scripts/embedding.py --params configs/params.yml
 """
 
 from __future__ import annotations
@@ -48,7 +52,6 @@ from medit.eggfm.models import EnergyMLP
 from medit.eggfm.config import EnergyModelConfig
 from medit.diffusion.config import diffusion_config_from_params
 from medit.diffusion.embed import build_diffusion_embedding_from_config
-from scripts.manifest_utils import write_embedding_manifest
 
 
 def build_pca_diffmap(
@@ -60,12 +63,12 @@ def build_pca_diffmap(
     Classical PCA → Diffmap.
 
     Populates:
-      - ad.obsm["X_pca"]        (if missing)
+      - ad.obsm["X_pca"]       (if missing)
       - ad.obsm["X_diff_pca"]  (first k diffusion components)
     """
     # PCA (compute if missing)
     if "X_pca" not in ad.obsm:
-        n_comps = max(k, 20)
+        n_comps = max(k, 30)
         print(f"[EMBEDDING] Computing PCA with n_comps={n_comps}", flush=True)
         sc.pp.scale(ad, max_value=10)
         sc.pp.pca(ad, n_comps=n_comps)
@@ -85,31 +88,48 @@ def build_pca_diffmap(
     # Keep Scanpy's X_diffmap around; it can be useful later.
 
 
-def maybe_subsample(
-    ad: sc.AnnData,
+def maybe_subsample_with_cap(
+    ad_full: sc.AnnData,
     n_cells_sample: int,
-    seed: int | None = None,
+    seed: int,
+    hard_cap: int = 60000,
 ) -> sc.AnnData:
     """
-    Optionally subsample cells for faster experimentation.
+    Optionally subsample cells for faster experimentation, with a hard cap.
 
-    If n_cells_sample <= 0 or >= n_obs, returns ad unchanged.
-    Otherwise returns a new AnnData view with n_cells_sample cells.
+    Rules:
+      - If n_cells_sample <= 0: use all cells, but cap at `hard_cap`.
+      - If n_cells_sample > 0: use min(n_cells_sample, hard_cap, n_obs).
     """
-    if n_cells_sample <= 0 or ad.n_obs <= n_cells_sample:
-        return ad
+    n_obs = ad_full.n_obs
 
-    rng = np.random.default_rng(seed)
-    idx = np.sort(rng.choice(ad.n_obs, size=n_cells_sample, replace=False))
-    print(
-        f"[EMBEDDING] Subsampling {n_cells_sample}/{ad.n_obs} cells "
-        f"(seed={seed})",
-        flush=True,
-    )
-    return ad[idx, :].copy()
+    if n_cells_sample <= 0:
+        target = min(hard_cap, n_obs)
+        reason = f"default (cap={hard_cap})"
+    else:
+        target = min(n_cells_sample, hard_cap, n_obs)
+        reason = f"requested={n_cells_sample}, cap={hard_cap}"
+
+    if target < n_obs:
+        rng = np.random.default_rng(seed)
+        idx = np.sort(rng.choice(n_obs, size=target, replace=False))
+        ad = ad_full[idx].copy()
+        print(
+            f"[EMBEDDING] Subsampled {target}/{n_obs} cells ({reason})",
+            flush=True,
+        )
+    else:
+        ad = ad_full
+        print(
+            f"[EMBEDDING] Using all {n_obs} cells (<= hard_cap={hard_cap})",
+            flush=True,
+        )
+
+    return ad
 
 
 def main() -> None:
+    # ---------- CLI: only params path ----------
     p = argparse.ArgumentParser(
         description="PCA→Diffmap and EGGFM→Diffmap dimension reductions."
     )
@@ -118,90 +138,92 @@ def main() -> None:
         required=True,
         help="Path to configs/params.yml",
     )
-    p.add_argument(
-        "--ad",
-        required=True,
-        help="QC .h5ad (e.g. data/interim/weinreb_qc.h5ad)",
-    )
-    p.add_argument(
-        "--energy-ckpt",
-        required=True,
-        help="EGGFM checkpoint (e.g. out/models/eggfm/eggfm_energy_weinreb.pt)",
-    )
-    p.add_argument(
-        "--out",
-        required=True,
-        help=(
-            "Base output .h5ad (e.g. data/interim/weinreb_embedding.h5ad). "
-            "Also writes *_pca_diffmap.h5ad and *_eggfm_diffmap.h5ad."
-        ),
-    )
-    p.add_argument(
-        "--k",
-        type=int,
-        default=10,
-        help="Number of diffusion components to keep (default: 10)",
-    )
-    p.add_argument(
-        "--n-neighbors",
-        type=int,
-        default=30,
-        help="k for kNN graph in PCA space (default: 30)",
-    )
-    p.add_argument(
-        "--n-cells-sample",
-        type=int,
-        default=0,
-        help="Optional cell subsample size (0 = use all cells)",
-    )
-    p.add_argument(
-        "--seed",
-        type=int,
-        default=7,
-        help="Random seed for subsampling / torch (default: 7)",
-    )
-    p.add_argument(
-        "--cfg-key",
-        default="eggfm_diffmap",
-        help="YAML block key for diffusion config (default: eggfm_diffmap)",
-    )
     args = p.parse_args()
 
-    # ---------- seeds ----------
-    if int(args.seed) is not None:
-        np.random.seed(int(args.seed))
-        torch.manual_seed(int(args.seed))
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(int(args.seed))
-
-    # ---------- params + config ----------
+    # ---------- load params + embedding config ----------
     params: Dict[str, Any] = yaml.safe_load(Path(args.params).read_text())
-    diff_cfg = diffusion_config_from_params(params, key=args.cfg_key)
+    emb_cfg: Dict[str, Any] = params.get("embedding", {})
+
+    ad_path = Path(emb_cfg["ad_path"])
+    energy_ckpt = Path(emb_cfg["energy_ckpt"])
+    out_dir = Path(emb_cfg.get("out_dir", "data/interim/embedding"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    k = int(emb_cfg.get("k", 30))
+    n_neighbors = int(emb_cfg.get("n_neighbors", 30))
+    n_cells_sample = int(emb_cfg.get("n_cells_sample", 0))
+    seed = int(emb_cfg.get("seed", 7))
+    cfg_key = emb_cfg.get("cfg_key", "eggfm_diffmap")
+
+    # ---------- echo resolved embedding config ----------
+    print("[EMBEDDING] Resolved embedding config (from params.yml):", flush=True)
+    print(f"  ad_path        = {ad_path}", flush=True)
+    print(f"  energy_ckpt    = {energy_ckpt}", flush=True)
+    print(f"  out_dir        = {out_dir}", flush=True)
+    print(f"  k              = {k}", flush=True)
+    print(f"  n_neighbors    = {n_neighbors}", flush=True)
+    print(f"  n_cells_sample = {n_cells_sample}", flush=True)
+    print(f"  seed           = {seed}", flush=True)
+    print(f"  cfg_key        = {cfg_key}", flush=True)
+
+    # ---------- seeds ----------
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    # ---------- diffusion config ----------
+    diff_cfg = diffusion_config_from_params(params, key=cfg_key)
+    try:
+        from dataclasses import asdict
+
+        diff_cfg_dict = asdict(diff_cfg)
+    except Exception:
+        diff_cfg_dict = diff_cfg.__dict__
+    print("[EMBEDDING] Using DiffusionConfig:", flush=True)
+    for k_cfg, v_cfg in diff_cfg_dict.items():
+        print(f"  {k_cfg}: {v_cfg}", flush=True)
 
     # ---------- load QC AnnData ----------
-    ad_full = sc.read_h5ad(args.ad)
+    ad_full = sc.read_h5ad(ad_path)
     print(
-        f"[EMBEDDING] Loaded QC AnnData: {ad_full.n_obs} cells × {ad_full.n_vars} genes",
+        f"[EMBEDDING] Loaded QC AnnData: "
+        f"{ad_full.n_obs} cells × {ad_full.n_vars} genes",
         flush=True,
     )
 
-    # work on a copy (and optionally subsample)
-    ad = maybe_subsample(
-        ad_full,
-        n_cells_sample=int(args.n_cells_sample),
-        seed=int(int(args.seed)),
+    # ---------- optional subsample with hard cap ----------
+    ad = maybe_subsample_with_cap(
+        ad_full=ad_full,
+        n_cells_sample=n_cells_sample,
+        seed=seed,
+        hard_cap=60000,
+    )
+    print(
+        f"[EMBEDDING] Using {ad.n_obs} cells for embedding "
+        f"(total available={ad_full.n_obs})",
+        flush=True,
     )
 
     # ---------- PCA → Diffmap ----------
-    build_pca_diffmap(ad, k=int(args.k), n_neighbors=int(args.n_neighbors))
+    build_pca_diffmap(ad, k=k, n_neighbors=n_neighbors)
 
     # ---------- EGGFM model ----------
-    ckpt = torch.load(args.energy_ckpt, map_location="cpu")
+    ckpt = torch.load(energy_ckpt, map_location="cpu", weights_only=False)
     model_cfg_dict = ckpt.get("model_cfg", {})
     n_genes = int(ckpt.get("n_genes", ad.n_vars))
 
+    print("[EMBEDDING] Energy model config from checkpoint:", model_cfg_dict, flush=True)
+    print(f"[EMBEDDING] n_genes from checkpoint / AnnData: {n_genes}", flush=True)
+
     model_cfg = EnergyModelConfig(**model_cfg_dict)
-    energy_model = EnergyMLP(n_genes=n_genes, hidden_dims=model_cfg.hidden_dims)
+    latent_dim = getattr(model_cfg, "latent_dim", None)
+
+    energy_model = EnergyMLP(
+        n_genes=n_genes,
+        hidden_dims=model_cfg.hidden_dims,
+        latent_dim=latent_dim,
+    )
     energy_model.load_state_dict(ckpt["state_dict"])
     energy_model.eval()
 
@@ -214,77 +236,27 @@ def main() -> None:
         obsm_key="X_eggfm_diffmap",
     )
 
-    # First k dims of the EGGFM diffusion embedding
-    X_diff_eggfm = ad.obsm["X_eggfm_diffmap"][:, : int(args.k)].copy()
+    # First k dims of EGGFM diffusion
+    X_diff_eggfm = ad.obsm["X_eggfm_diffmap"][:, :k].copy()
     ad.obsm["X_diff_eggfm"] = X_diff_eggfm
 
-    # ---------- compute output paths ----------
-    out_base = Path(args.out)
-    if out_base.suffix != ".h5ad":
-        out_base = out_base.with_suffix(".h5ad")
+    # ---------- write outputs ----------
+    pca_out = out_dir / "weinreb_pca_diffmap.h5ad"
+    eggfm_out = out_dir / "weinreb_eggfm_diffmap.h5ad"
 
-    out_dir = out_base.parent
-    stem = out_base.stem
+    # PCA-only view
+    ad_pca_only = ad.copy()
+    keep_keys = ["X_pca", "X_diff_pca"]
+    ad_pca_only.obsm = {
+        k_: v for k_, v in ad_pca_only.obsm.items() if k_ in keep_keys
+    }
+    ad_pca_only.write_h5ad(pca_out)
+    print(f"[EMBEDDING] Wrote PCA Diffmap embedding AnnData to {pca_out}")
 
-    out_combined = out_base
-    out_pca = out_dir / f"{stem}_pca_diffmap.h5ad"
-    out_eggfm = out_dir / f"{stem}_eggfm_diffmap.h5ad"
+    # Full EGGFM embedding (includes PCA + EGGFM views)
+    ad.write_h5ad(eggfm_out)
+    print(f"[EMBEDDING] Wrote EGGFM embedding AnnData to {eggfm_out}")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # ---------- write combined ----------
-    ad.write_h5ad(out_combined)
-    print(f"[EMBEDDING] Wrote combined embeddings to {out_combined}")
-
-    # ---------- write PCA-only ----------
-    ad_pca = ad.copy()
-    for key in ("X_eggfm_diffmap", "X_diff_eggfm"):
-        if key in ad_pca.obsm:
-            del ad_pca.obsm[key]
-    ad_pca.write_h5ad(out_pca)
-    print(f"[EMBEDDING] Wrote PCA→Diffmap embedding to {out_pca}")
-
-    # ---------- write EGGFM-only ----------
-    ad_eggfm = ad.copy()
-    if "X_diff_pca" in ad_eggfm.obsm:
-        del ad_eggfm.obsm["X_diff_pca"]
-    ad_eggfm.write_h5ad(out_eggfm)
-    print(f"[EMBEDDING] Wrote EGGFM→Diffmap embedding to {out_eggfm}")
-
-    # ---------- write combined ----------
-    ad.write_h5ad(out_combined)
-    print(f"[EMBEDDING] Wrote combined embeddings to {out_combined}")
-
-    # ---------- write PCA-only ----------
-    ad_pca = ad.copy()
-    for key in ("X_eggfm_diffmap", "X_diff_eggfm"):
-        if key in ad_pca.obsm:
-            del ad_pca.obsm[key]
-    ad_pca.write_h5ad(out_pca)
-    print(f"[EMBEDDING] Wrote PCA→Diffmap embedding to {out_pca}")
-
-    # ---------- write EGGFM-only ----------
-    ad_eggfm = ad.copy()
-    if "X_diff_pca" in ad_eggfm.obsm:
-        del ad_eggfm.obsm["X_diff_pca"]
-    ad_eggfm.write_h5ad(out_eggfm)
-    print(f"[EMBEDDING] Wrote EGGFM→Diffmap embedding to {out_eggfm}")
-
-    # ---------- manifest ----------
-    manifest_path = write_embedding_manifest(
-        qc_path=Path(args.ad),
-        out_path=out_path,
-        pca_path=out_path_pca,      # or None if you pack both in one file
-        eggfm_path=out_path_eggfm,  # or out_path if everything is in that file
-        params=params,
-        params_path=Path(args.params),
-        cfg_key=args.cfg_key,
-        k=args.k,
-        n_neighbors=args.n_neighbors,
-        n_cells_sample=args.n_cells_sample,
-        seed=args.seed,
-    )
-    print(f"[EMBEDDING] Wrote manifest to {manifest_path}")
 
 if __name__ == "__main__":
     main()

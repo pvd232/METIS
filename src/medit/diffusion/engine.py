@@ -15,13 +15,21 @@ from .metrics import (
     HessianMixedMetric,
 )
 from .core import DiffusionMapBuilder
-
+from .metrics_riemann import (
+    RiemannTangentAlignmentMetric,
+    RiemannCurvatureMetric,
+    RiemannNormalSuppressMetric,
+)
 _METRIC_REGISTRY = {
     "euclidean": EuclideanMetric,
     "scm": SCMMetric,
     "hessian_mixed": HessianMixedMetric,
-}
 
+    # Riemannian metrics (all optional ablation candidates)
+    "riem_tangent": RiemannTangentAlignmentMetric,
+    "riem_curvature": RiemannCurvatureMetric,
+    "riem_normal": RiemannNormalSuppressMetric,
+}
 
 class EGGFMDiffusionEngine:
     """

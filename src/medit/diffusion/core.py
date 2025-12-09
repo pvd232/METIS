@@ -22,7 +22,6 @@ class DiffusionMapBuilder:
         dist_vals: np.ndarray,
     ) -> np.ndarray:
         diff_cfg = self.diff_cfg
-        eps_value = diff_cfg.get("eps_value", 1.0)
         n_comps = diff_cfg.get("n_comps", 30)
         t = diff_cfg.get("t", 1.0)
         p = float(diff_cfg.get("distance_power", 1.0))

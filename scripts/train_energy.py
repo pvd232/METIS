@@ -42,6 +42,11 @@ def main() -> None:
     model_cfg: Dict[str, Any] = params.get("eggfm_model", {})
     train_cfg: Dict[str, Any] = params.get("eggfm_train", {})
 
+    print("[MEDIT.EGGFM] Raw eggfm_model block from params.yml:", flush=True)
+    print(model_cfg, flush=True)
+    print("[MEDIT.EGGFM] Raw eggfm_train block from params.yml:", flush=True)
+    print(train_cfg, flush=True)
+
     ad_prep = sc.read_h5ad(args.ad)
     print(
         f"[MEDIT.EGGFM] Loaded QC AnnData: "

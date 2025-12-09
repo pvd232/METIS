@@ -8,30 +8,41 @@ from typing import Sequence, Mapping, Any, Dict
 @dataclass
 class EnergyModelConfig:
     """
-    Architecture for the EnergyMLP.
-    Mirrors the expected keys in `eggfm_model` in params.yml.
+    Hyperparameters for the EnergyMLP architecture.
     """
-    hidden_dims: Sequence[int] = (512, 512)
+    hidden_dims: Sequence[int] = (256, 256)
+    # Optional latent bottleneck size. If not set, energy is computed directly
+    # from the last hidden layer.
+    latent_dim: int | None = None
+
+    @classmethod
+    def from_dict(cls, cfg: dict) -> "EnergyModelConfig":
+        return cls(
+            hidden_dims=tuple(cfg.get("hidden_dims", (256, 256))),
+            latent_dim=cfg.get("latent_dim", None),
+        )
 
 
 @dataclass
 class EnergyTrainConfig:
     batch_size: int = 256
     num_epochs: int = 100
-    lr: float = 1.0e-3
-    weight_decay: float = 0.0
+    lr: float = 1e-3
     sigma: float = 0.15
-    device: str | None = None
-
-    # from your YAML
-    latent_space: str = "hvg"
+    weight_decay: float = 0.0
+    max_grad_norm: float = 5.0
     early_stop_patience: int = 0
     early_stop_min_delta: float = 0.0
-    base_lr: float | None = None
+    device: str = "auto"
+    n_cells_sample: int | None = None     # ← new
+    latent_space: str = "hvg"
 
-    # extras that trainer may use
-    max_grad_norm: float = 5.0
-    seed: int | None = None
+    # Riemannian-style regularization
+    riemann_reg_weight: float = 0.0     # 0.0 = off
+    riemann_reg_type: str = "none"      # "none" | "hess_smooth"
+    riemann_eps: float = 1e-2           # finite-diff step size
+    riemann_n_dirs: int = 4             # random directions per cell
+
 
 @dataclass
 class EnergyModelBundle:

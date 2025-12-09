@@ -2,10 +2,10 @@ seed: 7
 hvg_n_top_genes: 2000
 
 spec:
-  n_pcs: 20
+  n_pcs: 30
   dcol_max_cells: 3000
-  ari_label_key: "Cell type annotation"   # <-- must match an obs column name
-  ari_n_dims: 10                          # how many dims to use for ARI per embedding
+  ari_label_key: "Cell type annotation"
+  ari_n_dims: 10
   ad_file: data/interim/weinreb.h5ad
 
 qc:
@@ -18,39 +18,71 @@ eggfm_model:
   latent_dim: 64
 
 eggfm_train:
-  batch_size: 2048
-  num_epochs: 150
-  lr: 4.0e-4
-  sigma: 1.0
+  batch_size: 8192
+  num_epochs: 50
+  lr: 5.0e-3
+  sigma: 0.15
   device: "cuda"
-  latent_space: "hvg"
-  early_stop_patience: 30
+  latent_space: "pca"
+  early_stop_patience: 5
   early_stop_min_delta: 0.0
-  n_cells_sample: 1000000
+  n_cells_sample: 0
+
+  riemann_reg_type: "hess_smooth"
+  riemann_reg_weight: 0.1
+  riemann_eps: 0.01
+  riemann_n_dirs: 4
 
 eggfm_diffmap:
-  geometry_source: "pca"        # "pca" or "hvg"
-  energy_source: "hvg"          # where SCM/Hessian read energies
-  metric_mode: "scm"      # "euclidean", "scm", or "hessian_mixed"
+  geometry_source: "pca"
+  energy_source: "hvg"
+  metric_mode: "scm"
+
   n_neighbors: 30
   n_comps: 30
   device: "cuda"
-  hvp_batch_size: 1024
-  eps_value: 1.0
-  eps_trunc: "yes"
-  distance_power: 1.0
-  t: 0.5
-  norm_type: "l1"
+  hvp_batch_size: 8192
+  eps_trunc: "no"
+  distance_power: 2.0
+  t: 3.0
+  norm_type: "l2"
 
   # SCM hyperparams
-  metric_gamma: 0.4
-  metric_lambda: 4.0
-  energy_clip_abs: 2.0
-  energy_batch_size: 2048
+  metric_gamma: 5.0
+  metric_lambda: 20.0
+  energy_clip_abs: 6.0
+  energy_batch_size: 8192
 
-  # Hessian mixing hyperparams
-  hessian_mix_mode: "none"      # "additive" | "multiplicative" | "none"
-  hessian_mix_alpha: 0.3
-  hessian_beta: 0.2
-  hessian_clip_std: 2.0
-  hessian_use_neg: true
+  # Riemannian geometry hyperparams
+  tangent_dim: 10
+  tangent_eps: 0.01
+  tangent_k: 30
+
+  curvature_k: 30
+  curvature_scale: 1.0
+
+  normal_k: 30
+  normal_weight: 1.0
+
+embedding:
+  ad_path: data/interim/weinreb_qc.h5ad
+  energy_ckpt: out/models/eggfm/eggfm_energy_weinreb.pt
+  out_dir: data/embedding
+  k: 30
+  n_neighbors: 30
+  n_cells_sample: 0
+  seed: 7
+  cfg_key: eggfm_diffmap
+
+ti_eval:
+  ad_path: data/embedding/weinreb_eggfm_diffmap.h5ad
+  embedding_key: X_eggfm_diffmap
+  time_key: "Time point"
+  cluster_key: "Cell type annotation"
+  fate_key: null
+  baseline_embedding_key: null
+  root_mask_key: null
+  n_neighbors: 30
+  n_dcs: 10
+  max_cells: 60000
+  out_dir: out/metrics/ti

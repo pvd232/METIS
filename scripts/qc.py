@@ -23,7 +23,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from medit.qc.pipeline import run_qc
+from medit.qc import run_qc
 
 
 def main() -> None:

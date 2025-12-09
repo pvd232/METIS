@@ -9,6 +9,17 @@ GeometrySource = Literal["pca", "hvg"]
 EnergySource = Literal["hvg", "pca"]
 MetricMode = Literal["euclidean", "scm", "hessian_mixed"]
 
+@dataclass
+class RiemannianConfig:
+    use_hessian_fro: bool = False
+    use_directional_smoothness: bool = False
+    use_tangent_penalty: bool = False
+    use_true_riemannian_distance: bool = False
+
+    alpha: float = 0.0
+    beta: float = 0.0
+    gamma: float = 0.0
+    n_dirs: int = 4
 
 @dataclass
 class DiffusionConfig:
@@ -31,7 +42,6 @@ class DiffusionConfig:
     # diffusion map parameters
     n_comps: int = 30
     t: float = 1.0
-    eps_value: float = 1.0
     eps_trunc: str | None = None  # "yes" or None
 
     # Hessian / SCM hyperparams (only used if relevant)
@@ -46,6 +56,11 @@ class DiffusionConfig:
     hessian_clip_std: float = 2.0
     hessian_use_neg: bool = True
     hvp_batch_size: int = 1024
+    
+    tangent_k: int = 30
+    tangent_dim: int = 5
+    normal_k: int = 30
+    normal_dim: int = 5
 
     # device
     device: str = "auto"  # "auto", "cuda", "cpu"
