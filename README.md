@@ -45,14 +45,26 @@ data/
     RAW_SOURCES.md                         # provenance notes
   interim/
     weinreb_qc.h5ad                        # QC’d + HVG’d AnnData (output)
-    weinreb_eggfm_diffmap.h5ad             # QC + EGGFM-based diffusion embedding
     paul15/                                # (optional) other datasets / scratch
+```
+
+Embeddings and model artifacts live under `out/`:
+
+```text
+out/
+  embeddings/
+    weinreb_eggfm_diffmap.h5ad             # EGGFM-based diffusion embedding
+    weinreb_embedding.h5ad                 # PCA vs EGGFM embedding comparison
+  models/
+    eggfm/
+      eggfm_energy_weinreb.pt              # EGGFM checkpoint bundle
 ```
 
 - `data/raw/` should contain the original Weinreb `.h5ad` (or the GSM components).
 - `data/interim/weinreb_qc.h5ad` is the **preprocessed artifact** for
   downstream models.
-- `data/interim/weinreb_eggfm_diffmap.h5ad` adds an EGGFM-based diffusion embedding.
+- `out/embeddings/*.h5ad` hold derived embeddings for analysis and plotting.
+- `out/models/eggfm/*.pt` are trained energy models.
 
 ---
 
@@ -63,11 +75,15 @@ README.md
 env.yml
 pyproject.toml
 
+configs/
+  params.yml
+
 data/
   raw/
   interim/
+
 out/
-  qc/
+  embeddings/
   models/
     eggfm/
 
@@ -76,6 +92,8 @@ scripts/
   qc.py                 # QC + HVG preprocessing for Weinreb
   train_energy.py       # Train EGGFM energy model on Weinreb
   diffusion_embed.py    # Build EGGFM-based diffusion embedding
+  embedding.py          # PCA → Diffmap and EGGFM → Diffmap comparison
+  inspect_h5ad.py       # Quick inspection helper for .h5ad files
 
 src/
   medit/
@@ -101,14 +119,14 @@ src/
 - Core logic lives under `src/medit/...`.
 - `scripts/` provides thin CLIs that parse arguments and call into `medit`.
 - `data/` is data-only; no code lives there.
-- `out/` holds model artifacts (e.g. EGGFM checkpoints) and QC outputs.
+- `out/` holds model artifacts and embedding outputs.
 
 ---
 
 ## 4. Configuration
 
 QC, HVG, energy, and diffusion settings are driven by `configs/params.yml`.
-Minimal required fields:
+Minimal required fields for the Weinreb pipeline:
 
 ```yaml
 dataset:
@@ -133,7 +151,7 @@ eggfm_train:
   max_grad_norm: 5.0
   early_stop_patience: 0  # 0 = no early stopping
 
-eggfm_diffusion:
+eggfm_diffmap:
   n_neighbors: 30         # k for kNN graph
   t: 10                   # diffusion time
   metric_mode: "scm"      # or "euclidean", etc.
@@ -148,7 +166,7 @@ eggfm_diffusion:
 - compute HVGs and subset to them,
 - normalize + log1p on `ad.X`, preserving raw counts in `ad.layers["counts"]`.
 
-`eggfm_model`, `eggfm_train`, and `eggfm_diffusion` blocks are consumed by the
+`eggfm_model`, `eggfm_train`, and `eggfm_diffmap` blocks are consumed by the
 EGGFM training and diffusion embedding steps described below.
 
 ---
@@ -163,9 +181,7 @@ cell × gene AnnData object that serves as the Weinreb input.
 From repo root:
 
 ```bash
-python scripts/make_h5ad.py \
-  --data-dir data/raw \
-  --out data/raw/stateFate_inVitro_normed_counts.h5ad
+python scripts/make_h5ad.py   --data-dir data/raw   --out data/raw/stateFate_inVitro_normed_counts.h5ad
 ```
 
 This will:
@@ -185,10 +201,7 @@ After the environment is set up and the package is installed (`pip install -e .`
 run:
 
 ```bash
-python scripts/qc.py \
-  --params configs/params.yml \
-  --ad data/raw/stateFate_inVitro_normed_counts.h5ad \
-  --out data/interim/weinreb_qc.h5ad
+python scripts/qc.py   --params configs/params.yml   --ad data/raw/stateFate_inVitro_normed_counts.h5ad   --out data/interim/weinreb_qc.h5ad
 ```
 
 This will:
@@ -220,7 +233,7 @@ print("var:", list(ad.var.columns)[:10])
 ## 6. EGGFM + Diffusion
 
 This section describes how to train an EGGFM energy model on Weinreb and then
-build an EGGFM-aware diffusion embedding.
+build EGGFM-aware diffusion embeddings.
 
 All commands are run from the repo root.
 
@@ -229,10 +242,7 @@ All commands are run from the repo root.
 ### 6.1 Train EGGFM on Weinreb (HVG space)
 
 ```bash
-python scripts/train_energy.py \
-  --params configs/params.yml \
-  --ad data/interim/weinreb_qc.h5ad \
-  --out-dir out/models/eggfm
+python scripts/train_energy.py   --params configs/params.yml   --ad data/interim/weinreb_qc.h5ad   --out-dir out/models/eggfm
 ```
 
 This will:
@@ -265,17 +275,12 @@ Once the EGGFM checkpoint exists, construct a diffusion embedding that uses the
 learned energy as a geometry prior:
 
 ```bash
-python scripts/diffusion_embed.py \
-  --params configs/params.yml \
-  --ad data/interim/weinreb_qc.h5ad \
-  --energy-ckpt out/models/eggfm/eggfm_energy_weinreb.pt \
-  --out data/interim/weinreb_eggfm_diffmap.h5ad \
-  --obsm-key X_eggfm_diffmap
+python scripts/diffusion_embed.py   --params configs/params.yml   --ad data/interim/weinreb_qc.h5ad   --energy-ckpt out/models/eggfm/eggfm_energy_weinreb.pt   --out out/embeddings/weinreb_eggfm_diffmap.h5ad   --obsm-key X_eggfm_diffmap
 ```
 
 This will:
 
-1. Load `eggfm_diffusion` from `configs/params.yml` (e.g. `n_neighbors`, `t`,
+1. Load `eggfm_diffmap` from `configs/params.yml` (e.g. `n_neighbors`, `t`,
    `metric_mode`, `device`).
 2. Load the EGGFM checkpoint and rebuild `EnergyMLP`.
 3. Construct an `EGGFMDiffusionEngine` from `medit.diffusion`.
@@ -285,7 +290,7 @@ This will:
 6. Write the resulting AnnData to:
 
    ```text
-   data/interim/weinreb_eggfm_diffmap.h5ad
+   out/embeddings/weinreb_eggfm_diffmap.h5ad
    ```
 
 To verify the embedding:
@@ -293,6 +298,36 @@ To verify the embedding:
 ```python
 import scanpy as sc
 
-ad = sc.read_h5ad("data/interim/weinreb_eggfm_diffmap.h5ad")
+ad = sc.read_h5ad("out/embeddings/weinreb_eggfm_diffmap.h5ad")
 print("embedding shape:", ad.obsm["X_eggfm_diffmap"].shape)
 ```
+
+---
+
+### 6.3 PCA vs EGGFM embeddings (optional comparison)
+
+For quick side-by-side comparisons of PCA-based and EGGFM-based diffusion
+embeddings on a subsample of cells, use `scripts/embedding.py`:
+
+```bash
+python scripts/embedding.py   --params configs/params.yml   --ad data/interim/weinreb_qc.h5ad   --energy-ckpt out/models/eggfm/eggfm_energy_weinreb.pt   --out out/embeddings/weinreb_embedding.h5ad   --k 10   --n-neighbors 30   --n-cells-sample 5000   --seed 7
+```
+
+This will:
+
+1. Subsample `n_cells_sample` cells from `weinreb_qc.h5ad`.
+2. Compute PCA (default 50 components), then a Scanpy diffusion map on `X_pca`.
+3. Build an EGGFM-based diffusion embedding using the same diffusion settings.
+4. Store both embeddings in:
+
+   ```text
+   out/embeddings/weinreb_embedding.h5ad
+   ```
+
+with keys:
+
+- `ad.obsm["X_diff_pca"]` — PCA → Diffmap embedding  
+- `ad.obsm["X_diff_eggfm"]` — EGGFM-based diffusion embedding  
+
+These can be used for downstream clustering, visualization, or ARI-based
+comparisons.

@@ -154,7 +154,7 @@ def run_qc(
     )
 
     ad = ad_full.to_memory()
-
+    ad.obs_names_make_unique()
     # ensure sparse CSR for downstream ops
     if not sparse.issparse(ad.X):
         ad.X = sparse.csr_matrix(ad.X)

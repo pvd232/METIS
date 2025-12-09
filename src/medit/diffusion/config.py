@@ -31,7 +31,6 @@ class DiffusionConfig:
     # diffusion map parameters
     n_comps: int = 30
     t: float = 1.0
-    eps_mode: str = "median"  # "median" or "fixed"
     eps_value: float = 1.0
     eps_trunc: str | None = None  # "yes" or None
 

@@ -22,7 +22,6 @@ class DiffusionMapBuilder:
         dist_vals: np.ndarray,
     ) -> np.ndarray:
         diff_cfg = self.diff_cfg
-        eps_mode = diff_cfg.get("eps_mode", "median")
         eps_value = diff_cfg.get("eps_value", 1.0)
         n_comps = diff_cfg.get("n_comps", 30)
         t = diff_cfg.get("t", 1.0)
@@ -30,12 +29,7 @@ class DiffusionMapBuilder:
 
         dist_p = dist_vals**p
 
-        if eps_mode == "median":
-            eps = np.median(dist_p)
-        elif eps_mode == "fixed":
-            eps = float(eps_value)
-        else:
-            raise ValueError(f"Unknown eps_mode: {eps_mode}")
+        eps = np.median(dist_p)
         print(f"[DiffusionMap] using eps = {eps:.4g} (power p={p})", flush=True)
 
         if diff_cfg.get("eps_trunc") == "yes":

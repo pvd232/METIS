@@ -1,0 +1,12 @@
+{
+  "git": "5df67b5",
+  "qc_path": "data/interim/weinreb_qc.h5ad",
+  "config": {
+    "params_path": null,
+    "cfg_key": "eggfm_diffmap",
+    "k": 0,
+    "n_neighbors": 0,
+    "n_cells_sample": 0,
+    "seed": 0
+  }
+}

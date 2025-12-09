@@ -40,7 +40,6 @@ def build_diffusion_embedding_from_config(
             "norm_type": diff_cfg.norm_type,
             "n_comps": diff_cfg.n_comps,
             "t": diff_cfg.t,
-            "eps_mode": diff_cfg.eps_mode,
             "eps_value": diff_cfg.eps_value,
             "eps_trunc": diff_cfg.eps_trunc,
             "metric_gamma": diff_cfg.metric_gamma,
