@@ -47,7 +47,11 @@ def compute_scalar_conformal_field(
     metric_gamma = float(diff_cfg.get("metric_gamma", 0.2))
     metric_lambda = float(diff_cfg.get("metric_lambda", 4.0))
     energy_batch_size = int(diff_cfg.get("energy_batch_size", 2048))
-    # max_abs = float(diff_cfg.get("energy_clip_abs", 3.0))
+    
+    if diff_cfg.get("energy_clip_abs"):
+        max_abs = float(diff_cfg.get("energy_clip_abs", 3.0))
+    else:
+        max_abs = None
 
     mean = X_energy.mean(axis=0, keepdims=True)
     std  = X_energy.std(axis=0, keepdims=True)
@@ -76,10 +80,13 @@ def compute_scalar_conformal_field(
     mad = np.median(np.abs(E_vals - med)) + 1e-8
     E_norm = (E_vals - med) / mad
 
-    # E_clip = E_norm
+    if max_abs:
+        E_clip = np.clip(E_norm, -max_abs, max_abs)
+    else:
+        E_clip = E_norm
 
     # softer exponential to avoid insane G ranges
-    G = metric_gamma + metric_lambda * np.exp(0.5 * E_norm)
+    G = metric_gamma + metric_lambda * np.exp(0.5 * E_clip)
 
     if not np.isfinite(G).all():
         raise ValueError(
@@ -89,8 +96,8 @@ def compute_scalar_conformal_field(
     print(
         "[EGGFM SCM] energy stats: "
         f"raw_min={E_vals.min():.4f}, raw_max={E_vals.max():.4f}, "
-        f"norm_min={E_norm.min():.4f}, norm_max={E_norm.max():.4f}, ",
-        # f"clip=±{max_abs:.1f}",
+        f"norm_min={E_norm.min():.4f}, norm_max={E_norm.max():.4f}, "
+        f"clip=±{max_abs:.1f}",
         flush=True,
     )
     print(

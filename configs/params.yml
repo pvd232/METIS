@@ -58,6 +58,14 @@ eggfm_diffmap:
   tangent_eps: 0.01
   tangent_k: 30
 
+  # Iterative density refinement
+  n_refinement_steps: 3
+  refinement_n_clusters: 32
+  refinement_beta_start: 0.0
+  refinement_beta_end: 1.0
+  refinement_energy_clip: 6.0
+  refinement_weight_floor: 1.0e-3
+
   curvature_k: 30
   curvature_scale: 1.0
 

@@ -42,6 +42,14 @@ class EnergyTrainConfig:
     riemann_reg_type: str = "none"      # "none" | "hess_smooth"
     riemann_eps: float = 1e-2           # finite-diff step size
     riemann_n_dirs: int = 4             # random directions per cell
+    
+    # Iterative density refinement (4.2-ish)
+    n_refinement_steps: int = 1 # recovers uniform density
+    refinement_n_clusters: int = 32
+    refinement_beta_start: float = 0.0
+    refinement_beta_end: float = 1.0
+    refinement_energy_clip: float = 6.0
+    refinement_weight_floor: float = 1e-3
 
 
 @dataclass

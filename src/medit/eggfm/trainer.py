@@ -9,8 +9,10 @@ import subprocess
 import torch
 import torch.nn as nn
 from torch import optim
-from torch.utils.data import DataLoader
-import scanpy as sc  # type: ignore
+from torch.utils.data import DataLoader, WeightedRandomSampler
+import numpy as np
+from sklearn.cluster import KMeans
+import scanpy as sc 
 
 from .models import EnergyMLP
 from .dataset import AnnDataExpressionDataset
@@ -96,13 +98,11 @@ def _git_commit_or_none() -> str | None:
 def log_config(
     model_cfg: EnergyModelConfig,
     train_cfg: EnergyTrainConfig,
+    *,
+    dataset_n_cells: int | None = None,
+    dataset_n_genes: int | None = None,
     extra: Dict[str, Any] | None = None,
 ) -> Path:
-    """
-    Create ./manifest/runX/manifest.json in the CWD.
-
-    Returns the created run directory path.
-    """
     manifest_root = Path.cwd() / "manifest"
     run_id, run_dir = _next_run_dir(manifest_root)
     manifest_path = run_dir / "manifest.json"
@@ -114,6 +114,12 @@ def log_config(
         "model_cfg": _to_plain(model_cfg),
         "train_cfg": _to_plain(train_cfg),
     }
+
+    if dataset_n_cells is not None or dataset_n_genes is not None:
+        payload["data"] = {
+            "n_cells": dataset_n_cells,
+            "n_genes": dataset_n_genes,
+        }
 
     if extra:
         payload["extra"] = _to_plain(extra)
@@ -159,10 +165,6 @@ def _dsm_loss(
     return 0.5 * (score - target).pow(2).sum(dim=1).mean()
 
 
-# ---------------------------------------------------------------------
-# The EnergyTrainer class — restored
-# ---------------------------------------------------------------------
-
 class EnergyTrainer:
     """
     Full trainer class wrapping DSM + optional Riemannian regularizers.
@@ -177,7 +179,7 @@ class EnergyTrainer:
         train_cfg = _ensure_train_cfg(train_cfg)
 
         # device
-        if train_cfg.device is None:
+        if train_cfg.device in (None, "auto"):
             device_str = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             device_str = train_cfg.device
@@ -186,6 +188,8 @@ class EnergyTrainer:
         # model
         self.model = model.to(self.device)
 
+        self.dataset = dataset
+        
         # dataloader
         self.loader = DataLoader(
             dataset,
@@ -209,113 +213,189 @@ class EnergyTrainer:
         self.riem_eps = float(train_cfg.riemann_eps)
         self.riem_n_dirs = int(train_cfg.riemann_n_dirs)
 
+    # ---------------------------------------------------------------------
+    # Helper functions
+    # ---------------------------------------------------------------------
+
+    def _set_uniform_loader(self) -> None:
+        """Original behavior: uniform sampling with shuffle=True."""
+        self.loader = DataLoader(
+            self.dataset,
+            batch_size=self.cfg.batch_size,
+            shuffle=True,
+            drop_last=False,
+        )
+
+    def _compute_energies(self, batch_size: int = 4096) -> np.ndarray:
+        """Compute E(x_i) for all cells under the current model."""
+        self.model.eval()
+        loader = DataLoader(self.dataset, batch_size=batch_size, shuffle=False)
+        energies = []
+        with torch.no_grad():
+            for x in loader:
+                x = x.to(self.device)
+                e = self.model(x)
+                if e.ndim > 1:
+                    e = e.squeeze(-1)
+                energies.append(e.cpu().numpy())
+        self.model.train()
+        return np.concatenate(energies, axis=0)  # [N]
+
+    def _make_weights_for_step(self, step_idx: int, n_steps: int) -> torch.Tensor:
+        """
+        Simple SNIS-style weights:
+        - cluster with k-means
+        - within each cluster, upweight high-energy points
+        - anneal beta over refinement steps
+        """
+        N = len(self.dataset)
+
+        # anneal beta from start -> end
+        beta0 = self.cfg.refinement_beta_start
+        beta1 = self.cfg.refinement_beta_end
+        beta = beta0 + (beta1 - beta0) * (step_idx / max(n_steps - 1, 1))
+
+        # energy and clipping
+        E = self._compute_energies()
+        E = np.clip(E, -self.cfg.refinement_energy_clip, self.cfg.refinement_energy_clip)
+        E = (E - E.mean()) / (E.std() + 1e-6)
+
+        # cluster for stratification
+        X = self.dataset.X  # assuming AnnDataExpressionDataset exposes .X
+        k = self.cfg.refinement_n_clusters
+        km = KMeans(n_clusters=k, random_state=0, n_init="auto")
+        labels = km.fit_predict(X)
+
+        weights = np.zeros(N, dtype=np.float64)
+        for j in range(k):
+            mask = labels == j
+            if not np.any(mask):
+                continue
+            E_j = E[mask]
+            w_j = np.exp(beta * E_j)
+            w_j = np.maximum(w_j, self.cfg.refinement_weight_floor)
+            w_j /= w_j.sum()
+            weights[mask] = w_j
+
+        weights /= weights.sum()
+        return torch.from_numpy(weights)
+
+    def _set_weighted_loader(self, step_idx: int, n_steps: int) -> None:
+        """Rebuild self.loader with a WeightedRandomSampler."""
+        weights = self._make_weights_for_step(step_idx, n_steps)
+        sampler = WeightedRandomSampler(
+            weights=weights,
+            num_samples=len(weights),
+            replacement=True,
+        )
+        self.loader = DataLoader(
+            self.dataset,
+            batch_size=self.cfg.batch_size,
+            sampler=sampler,
+            shuffle=False,
+            drop_last=False,
+        )
     # ------------------------------------------------------------------
     def train(self) -> EnergyMLP:
         best_loss = float("inf")
         best_state = None
         patience = 0
+        
+         # Fallback to 1 if the field is missing
+        n_steps = max(int(getattr(self.cfg, "n_refinement_steps", 1)), 1)
+        epochs_per_step = max(self.cfg.num_epochs // n_steps, 1)
 
-        for epoch in range(self.cfg.num_epochs):
-            epoch_loss = 0.0
-            batches = 0
+        for step in range(n_steps):
+            if n_steps == 1:
+                self._set_uniform_loader()
+            else:
+                self._set_weighted_loader(step, n_steps)
 
-            for batch in self.loader:
-                batch = batch.to(self.device)
+            print(f"[Energy DSM] Refinement step {step+1}/{n_steps}", flush=True)
+            
+            for local_epoch in range(epochs_per_step):
+                # Optional: global epoch index, if you want consistent logging
+                global_epoch = step * epochs_per_step + local_epoch
 
-                self.optimizer.zero_grad()
+                epoch_loss = 0.0
+                batches = 0
 
-                # DSM loss
-                loss = _dsm_loss(
-                    model=self.model,
-                    x=batch,
-                    sigma=self.cfg.sigma,
+                for batch in self.loader:
+                    batch = batch.to(self.device)
+
+                    self.optimizer.zero_grad()
+
+                    # DSM loss
+                    loss = _dsm_loss(
+                        model=self.model,
+                        x=batch,
+                        sigma=self.cfg.sigma,
+                    )
+
+                    # Riemannian regularizer
+                    if self.riem_weight > 0.0 and self.riem_type != "none":
+                        if self.riem_type == "hess_smooth":
+                            reg = hessian_smoothness_penalty(
+                                x=batch,
+                                energy_model=self.model,
+                                eps=self.riem_eps,
+                                n_dirs=self.riem_n_dirs,
+                            )
+                        else:
+                            reg = 0.0
+                        loss = loss + self.riem_weight * reg
+
+                    loss.backward()
+
+                    # grad clipping
+                    if self.cfg.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.cfg.max_grad_norm,
+                        )
+
+                    self.optimizer.step()
+
+                    epoch_loss += float(loss.item())
+                    batches += 1
+
+                epoch_loss /= max(batches, 1)
+
+                print(
+                    f"[Energy DSM] Epoch {global_epoch+1}/{self.cfg.num_epochs}  "
+                    f"loss={epoch_loss:.6e}",
+                    flush=True,
                 )
 
-                # Riemannian regularizer
-                if self.riem_weight > 0.0 and self.riem_type != "none":
-                    if self.riem_type == "hess_smooth":
-                        reg = hessian_smoothness_penalty(
-                            x=batch,
-                            energy_model=self.model,
-                            eps=self.riem_eps,
-                            n_dirs=self.riem_n_dirs,
-                        )
-                    else:
-                        reg = 0.0
-                    loss_ratio = (self.riem_weight * reg) / loss
-                    print(
-                        f"[Energy DSM] Epoch {epoch+1}/{self.cfg.num_epochs}  "                        
-                        f"Loss ratio={loss_ratio:.6e}",
-                        flush=True
-                    )
-                    
-                    loss = loss + self.riem_weight * reg
-                
-                loss.backward()
+                # early stopping
+                if epoch_loss < best_loss - self.cfg.early_stop_min_delta:
+                    best_loss = epoch_loss
+                    best_state = {
+                        k: v.detach().cpu().clone()
+                        for k, v in self.model.state_dict().items()
+                    }
+                    patience = 0
+                else:
+                    patience += 1
 
-                # grad clipping
-                if self.cfg.max_grad_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.cfg.max_grad_norm,
-                    )
+                if (
+                    self.cfg.early_stop_patience > 0
+                    and patience >= self.cfg.early_stop_patience
+                ):
+                    print(f"[Energy DSM] Early stop at epoch {global_epoch+1}")
+                    break
 
-                self.optimizer.step()
-
-                epoch_loss += float(loss.item())
-                batches += 1
-
-            epoch_loss /= max(batches, 1)
-
-            print(
-                f"[Energy DSM] Epoch {epoch+1}/{self.cfg.num_epochs}  "
-                f"loss={epoch_loss:.6e}",
-                flush=True,
-            )
-
-            # early stopping
-            if epoch_loss < best_loss:
-                best_loss = epoch_loss
-                best_state = self.model.state_dict()
-                patience = 0
-            else:
-                patience += 1
-            if self.cfg.early_stop_patience > 0 and patience >= self.cfg.early_stop_patience:
-                print(f"[Energy DSM] Early stop at epoch {epoch+1}")
+            # propagate early stop out of refinement loop
+            if (
+                self.cfg.early_stop_patience > 0
+                and patience >= self.cfg.early_stop_patience
+            ):
                 break
 
         if best_state is not None:
             self.model.load_state_dict(best_state)
 
-
-    if log_manifest:
-        # A few useful extras (totally optional)
-        extra = {
-            "data": {
-                "n_cells": int(ad_prep.n_obs),
-                "n_genes": int(ad_prep.n_vars),
-            },
-            "riemann": {
-                "type": train_cfg.riemann_reg_type,
-                "weight": float(train_cfg.riemann_reg_weight),
-                "eps": float(train_cfg.riemann_eps),
-                "n_dirs": int(train_cfg.riemann_n_dirs),
-            },
-            "training": {
-                "num_epochs": int(train_cfg.num_epochs),
-                "sigma": float(train_cfg.sigma),
-                "batch_size": int(train_cfg.batch_size),
-                "device": train_cfg.device,
-            },
-        }
-        log_config(model_cfg=model_cfg, train_cfg=train_cfg, extra=extra)
-
         return self.model
-
-
-# ---------------------------------------------------------------------
-# Functional API, still supported
-# ---------------------------------------------------------------------
 
 def train_energy_model(
     ad_prep: sc.AnnData,
@@ -335,4 +415,11 @@ def train_energy_model(
     )
 
     trainer = EnergyTrainer(model, dataset, train_cfg)
-    return trainer.train()
+    trained_model = trainer.train()
+    log_config(
+        model_cfg=model_cfg,
+        train_cfg=train_cfg,
+        dataset_n_cells=int(ad_prep.n_obs),
+        dataset_n_genes=int(ad_prep.n_vars),
+    )
+    return trained_model

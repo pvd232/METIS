@@ -41,7 +41,6 @@ def build_diffusion_embedding_from_config(
         "n_comps": diff_cfg.n_comps,
         "t": diff_cfg.t,
         "eps_trunc": diff_cfg.eps_trunc,
-        # NEW: actually use p
         "distance_power": getattr(diff_cfg, "distance_power", 1.0),
 
         "metric_gamma": diff_cfg.metric_gamma,
