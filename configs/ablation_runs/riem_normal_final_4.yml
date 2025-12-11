@@ -1,84 +1,73 @@
-seed: 7
+seed: 11
 hvg_n_top_genes: 2000
-
 spec:
   n_pcs: 30
   dcol_max_cells: 3000
-  ari_label_key: "Cell type annotation"
+  ari_label_key: Cell type annotation
   ari_n_dims: 10
   ad_file: data/interim/weinreb.h5ad
-
 qc:
   min_cells: 500
   min_genes: 200
   max_pct_mt: 15
-
 eggfm_model:
-  hidden_dims: [512, 512, 512, 512]
+  hidden_dims:
+  - 512
+  - 512
+  - 512
+  - 512
   latent_dim: 64
-
 eggfm_train:
   batch_size: 8192
   num_epochs: 50
-  lr: 5.0e-3
+  lr: 0.005
   sigma: 0.15
-  device: "cuda"
-  latent_space: "pca"
+  device: cuda
+  latent_space: pca
   early_stop_patience: 5
   early_stop_min_delta: 0.0
   n_cells_sample: 0
-
-  riemann_reg_type: "hess_smooth"
+  riemann_reg_type: hess_smooth
   riemann_reg_weight: 0.1
   riemann_eps: 0.01
   riemann_n_dirs: 4
-
 eggfm_diffmap:
-  geometry_source: "pca"
-  energy_source: "hvg"
-  metric_mode: "scm"
-
-  n_neighbors: 30
+  geometry_source: pca
+  energy_source: hvg
+  metric_mode: riem_normal
+  n_neighbors: 10
   n_comps: 30
-  device: "cuda"
-  hvp_batch_size: 4096
-  eps_trunc: "no"
+  device: cuda
+  hvp_batch_size: 256
+  eps_trunc: 'no'
   distance_power: 2.0
   t: 3.0
-  norm_type: "l2"
-
-  # SCM hyperparams
+  norm_type: l2
   metric_gamma: 5.0
   metric_lambda: 20.0
   energy_clip_abs: 6.0
   energy_batch_size: 8192
-
-  # Riemannian geometry hyperparams
-  tangent_dim: 10
+  tangent_dim: 15
   tangent_eps: 0.01
-  tangent_k: 30
-
+  tangent_k: 15
   curvature_k: 30
   curvature_scale: 1.0
-
-  normal_k: 30
-  normal_weight: 1.0
-
+  normal_k: 40
+  normal_weight: 1.25
 embedding:
   ad_path: data/interim/weinreb_qc.h5ad
   energy_ckpt: out/models/eggfm/eggfm_energy_weinreb.pt
   out_dir: data/embedding
   k: 30
   n_neighbors: 30
-  n_cells_sample: 0
+  n_cells_sample: 15000
   seed: 7
   cfg_key: eggfm_diffmap
-
 ti_eval:
   ad_path: data/embedding/weinreb_eggfm_diffmap.h5ad
   embedding_key: X_eggfm_diffmap
-  time_key: "Time point"
-  cluster_key: "Cell type annotation"
+  time_key: Time point
+  cluster_key: Cell type annotation
   fate_key: null
   baseline_embedding_key: null
   root_mask_key: null

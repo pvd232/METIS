@@ -1,104 +1,67 @@
 #!/usr/bin/env python3
 """
-scripts/run_ablation.py
+scripts/run_ablation_riem_xhard.py
 
-L4-safe, Riemannian-only ablation runner.
+Brutal, Riemannian-only ablation that pushes hard around your best
+regimes:
 
-It generates configs under configs/ablation_runs/, then runs:
+  - riem_normal @ 15k cells (around r62)
+  - riem_curvature @ 5k cells (around r63–r66)
 
-    python scripts/embedding.py --params cfg.yml
-    python scripts/ti_eval.py    --params cfg.yml
+This is *not* gentle. It cranks:
+  - normal_weight and normal_k (for riem_normal)
+  - curvature_beta and curvature_scale (for riem_curvature)
+plus a few tangent_dim / tangent_eps tweaks.
 
-All settings (n_cells_sample, hvp_batch_size, neighbors, etc.)
-are automatically adjusted per metric to avoid GPU OOM on an L4 (24GB).
+All runs are still L4-safe (15k or 5k cells; hvp_batch_size chosen
+from configs you already ran successfully).
 """
 
 from __future__ import annotations
+
 import subprocess
-import yaml
-from pathlib import Path
 from copy import deepcopy
+from pathlib import Path
+
+import yaml
 
 
 # =============================================================================
-#  ABLATION SEARCH SPACES — FINAL Riemannian push
+#  SEARCH SPACES — AROUND BEST CONFIGS, BUT TURNED UP
 # =============================================================================
 
-# ---------- Riemannian normal metric (medium cost, 15k cells) ----------
-# Tuned around your best runs (Spearman ~0.4147), but pushing:
-#   - larger tangent_dim
-#   - stronger normal penalty / larger normal_k
-RIEM_NORMAL_GRID = [
-    # (A) Baseline best-ish: small tangent, strong normal penalty
-    {
-        "tangent_dim": 10,
-        "tangent_eps": 0.01,
-        "tangent_k": 15,
-        "normal_k": 30,
-        "normal_weight": 1.0,
-    },
-    # (B) Slightly larger tangent subspace, same normal strength
-    {
-        "tangent_dim": 15,
-        "tangent_eps": 0.01,
-        "tangent_k": 15,
-        "normal_k": 30,
-        "normal_weight": 1.0,
-    },
-    # (C) Larger tangent + same normal
-    {
-        "tangent_dim": 20,
-        "tangent_eps": 0.01,
-        "tangent_k": 15,
-        "normal_k": 30,
-        "normal_weight": 1.0,
-    },
-    # (D) Same tangent as (B), but *hard* normal penalization
-    {
-        "tangent_dim": 15,
-        "tangent_eps": 0.01,
-        "tangent_k": 15,
-        "normal_k": 40,
-        "normal_weight": 1.25,
-    },
+# -------------------------------------------------------------------------
+# Riemannian normal @ 15k
+#
+# Best so far (r62):
+#   tangent_dim = 15
+#   tangent_eps = 0.01
+#   tangent_k   = 15
+#   normal_k    = 40
+#   normal_weight = 1.25
+#
+# Here we:
+#   - push normal_weight to 1.5, 1.75, 2.0
+#   - push normal_k to 50 and 60
+#   - tweak tangent_dim (12, 18) and tangent_eps / tangent_k slightly
+# -------------------------------------------------------------------------
+
+RIEM_NORMAL_XHARD = [
 ]
 
-# ---------- Riemannian curvature metric (heavy, 5k cells) ----------
-# Current runs plateau at Spearman ~0.3993, largely insensitive to:
-#   curvature_beta ∈ {0.2, 0.4}, curvature_k ∈ {20, 30}, curvature_scale = 1.0
-# We now push curvature_scale and curvature_k, and use n_neighbors=10.
-RIEM_CURVATURE_GRID = [
-    {
-        "curvature_beta": 0.4,
-        "curvature_clip_std": 2.0,
-        "curvature_k": 30,
-        "curvature_scale": 1.5,
-    },
-    {
-        "curvature_beta": 0.4,
-        "curvature_clip_std": 2.0,
-        "curvature_k": 30,
-        "curvature_scale": 2.0,
-    },
-    {
-        "curvature_beta": 0.4,
-        "curvature_clip_std": 2.0,
+RIEM_CURVATURE_XHARD = [
+    # Mid-scale, stronger curvature than old 0.2
+        {
+        "name": "beta6.0_scale10.0",
+        "curvature_beta": 6.0,
+        "curvature_clip_std": 10.0,
         "curvature_k": 40,
-        "curvature_scale": 1.5,
-    },
-    {
-        "curvature_beta": 0.4,
-        "curvature_clip_std": 2.0,
-        "curvature_k": 40,
-        "curvature_scale": 2.0,
-    },
-]
-
+        "curvature_scale": 10.0,
+    },]
 
 # =============================================================================
-#  BASE PARAMS (unchanged, except SCM no longer used)
+#  BASE PARAMS (same backbone as your current Riemannian ablation)
 # =============================================================================
-
 BASE = {
     "seed": 11,
     "hvg_n_top_genes": 2000,
@@ -132,8 +95,6 @@ BASE = {
         "early_stop_patience": 5,
         "early_stop_min_delta": 0.0,
         "n_cells_sample": 0,
-
-        # Riemannian regularizer (training-time only)
         "riemann_reg_type": "hess_smooth",
         "riemann_reg_weight": 0.1,
         "riemann_eps": 0.01,
@@ -149,23 +110,17 @@ BASE = {
         "n_comps": 30,
         "device": "cuda",
         "hvp_batch_size": 8192,
-        "eps_trunc": "no",
+        "eps_trunc": "yes",
         "distance_power": 2.0,
-        "t": 3.0,
-        "norm_type": "l2",
-
-        # SCM defaults (ignored, metric_mode != "scm")
-        "metric_gamma": 5.0,
-        "metric_lambda": 20.0,
-        "energy_clip_abs": 6.0,
-        "energy_batch_size": 8192,
+        "t": 4.0,
+        "norm_type": "l2",        
 
         # Riemann defaults (overwritten)
         "tangent_dim": 10,
         "tangent_eps": 0.01,
         "tangent_k": 30,
         "curvature_k": 30,
-        "curvature_scale": 1.0,
+        "curvature_scale": 5.0,
         "normal_k": 30,
         "normal_weight": 1.0,
     },
@@ -189,7 +144,7 @@ BASE = {
         "fate_key": None,
         "baseline_embedding_key": None,
         "root_mask_key": None,
-         "n_neighbors": 30,
+        "n_neighbors": 30,
         "n_dcs": 10,
         "max_cells": 60000,
         "out_dir": "out/metrics/ti",
@@ -204,34 +159,41 @@ BASE = {
 RUN_DIR = Path("configs/ablation_runs")
 RUN_DIR.mkdir(parents=True, exist_ok=True)
 
-def sh(cmd: str):
+
+def sh(cmd: str) -> None:
     print(f"\n🔥 Running: {cmd}\n", flush=True)
     subprocess.run(cmd, shell=True, check=True)
 
 
 # =============================================================================
-#  MAIN ABLATION LOGIC
+#  MAIN
 # =============================================================================
 
-def main():
+def main() -> None:
     idx = 0
 
     # ================================
     # 1. Riemannian normal — 15k cells
     # ================================
-    for g in RIEM_NORMAL_GRID:
+    for g in RIEM_NORMAL_XHARD:
         idx += 1
         cfg = deepcopy(BASE)
 
         cfg["eggfm_diffmap"]["metric_mode"] = "riem_normal"
-        cfg["eggfm_diffmap"]["hvp_batch_size"] = 256
-        cfg["eggfm_diffmap"]["n_neighbors"] = 10  # as before
+        cfg["eggfm_diffmap"]["hvp_batch_size"] = 256   # safe for 15k
+        cfg["eggfm_diffmap"]["n_neighbors"] = 10       # metric neighbors
 
         cfg["embedding"]["n_cells_sample"] = 15000
 
-        cfg["eggfm_diffmap"].update(g)
+        # Apply core riem_normal defaults around best regime
+        cfg["eggfm_diffmap"]["tangent_dim"] = g["tangent_dim"]
+        cfg["eggfm_diffmap"]["tangent_eps"] = g["tangent_eps"]
+        cfg["eggfm_diffmap"]["tangent_k"] = g["tangent_k"]
+        cfg["eggfm_diffmap"]["normal_k"] = g["normal_k"]
+        cfg["eggfm_diffmap"]["normal_weight"] = g["normal_weight"]
 
-        path = RUN_DIR / f"riem_normal_final_{idx}.yml"
+        run_name = g["name"]
+        path = RUN_DIR / f"xhard_riem_normal_{idx}_{run_name}.yml"
         path.write_text(yaml.dump(cfg, sort_keys=False))
 
         sh(f"python scripts/embedding.py --params {path}")
@@ -240,25 +202,36 @@ def main():
     # ================================
     # 2. Riemannian curvature — 5k cells
     # ================================
-    for g in RIEM_CURVATURE_GRID:
+    for g in RIEM_CURVATURE_XHARD:
         idx += 1
         cfg = deepcopy(BASE)
 
         cfg["eggfm_diffmap"]["metric_mode"] = "riem_curvature"
-        cfg["eggfm_diffmap"]["hvp_batch_size"] = 128
-        cfg["eggfm_diffmap"]["n_neighbors"] = 10  # bumped from 5 → 10
+        cfg["eggfm_diffmap"]["hvp_batch_size"] = 256   # you already ran 5k with this
+        cfg["eggfm_diffmap"]["n_neighbors"] = 10         # curvature metric neighbors
 
-        cfg["embedding"]["n_cells_sample"] = 5000
+        cfg["embedding"]["n_cells_sample"] = 15000
 
-        cfg["eggfm_diffmap"].update(g)
+        # Fix tangent/normal around successful regime, but allow overrides
+        cfg["eggfm_diffmap"]["tangent_dim"] = g.get("tangent_dim", 10)
+        cfg["eggfm_diffmap"]["tangent_eps"] = g.get("tangent_eps", 0.01)
+        cfg["eggfm_diffmap"]["tangent_k"] = g.get("tangent_k", 30)
+        cfg["eggfm_diffmap"]["normal_k"] = 30
+        cfg["eggfm_diffmap"]["normal_weight"] = g.get("normal_weight", 1.0)
 
-        path = RUN_DIR / f"riem_curvature_final_{idx}.yml"
+        cfg["eggfm_diffmap"]["curvature_beta"] = g["curvature_beta"]
+        cfg["eggfm_diffmap"]["curvature_clip_std"] = g["curvature_clip_std"]
+        cfg["eggfm_diffmap"]["curvature_k"] = g["curvature_k"]
+        cfg["eggfm_diffmap"]["curvature_scale"] = g["curvature_scale"]
+
+        run_name = g["name"]
+        path = RUN_DIR / f"xhard_riem_curvature_{idx}_{run_name}.yml"
         path.write_text(yaml.dump(cfg, sort_keys=False))
 
         sh(f"python scripts/embedding.py --params {path}")
         sh(f"python scripts/ti_eval.py --params {path}")
 
-    print("\n🎉 ALL FINAL Riemannian ABLATIONS COMPLETE.\n")
+    print("\n🎉 ALL XHARD RIEMANNIAN ABLATIONS COMPLETE.\n")
 
 
 if __name__ == "__main__":

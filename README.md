@@ -152,10 +152,34 @@ eggfm_train:
   early_stop_patience: 0  # 0 = no early stopping
 
 eggfm_diffmap:
-  n_neighbors: 30         # k for kNN graph
-  t: 10                   # diffusion time
-  metric_mode: "scm"      # or "euclidean", etc.
-  device: "cuda"          # or "cpu"
+  # Geometry sources
+  geometry_source: "pca"    # coordinates used to build the kNN graph
+  energy_source: "hvg"      # coordinates used as input to the energy model
+
+  # Diffusion kernel
+  n_neighbors: 30           # k for kNN graph
+  t: 10                     # diffusion time
+  distance_power: 2.0       # exponent on base distances
+  device: "cuda"            # or "cpu"
+
+  # Metric choice
+  metric_mode: "scm"        # one of: "euclidean", "scm",
+                            #          "riem_tangent", "riem_normal", "riem_curvature"
+
+  # Scalar conformal metric (SCM) hyperparameters
+  metric_gamma: 5.0         # controls how strongly energy rescales distances
+  metric_lambda: 20.0       # sharpness of conformal rescaling
+  energy_clip_abs: 6.0      # |E(x)| clipping before exponentiation
+  energy_batch_size: 8192   # mini-batch size when scoring energies
+
+  # Riemannian metric hyperparameters
+  tangent_dim: 10           # dim. of estimated local tangent space
+  tangent_eps: 0.01         # radius for local PCA neighborhood
+  tangent_k: 30             # kNN size used for tangent estimation
+  curvature_k: 30           # neighbors for curvature estimates
+  curvature_scale: 1.0      # rescales curvature contribution
+  normal_k: 30              # neighbors for estimating normal space
+  normal_weight: 1.0        # penalty for leaving the manifold
 ```
 
 `medit.qc.pipeline.prep` uses the `qc` and `hvg_n_top_genes` entries and will:
@@ -269,7 +293,74 @@ The checkpoint contains:
 
 ---
 
-### 6.2 Build an EGGFM-based diffusion embedding
+### 6.2 Metric modes and learned geometry
+
+The diffusion layer supports several choices of geometric metric, controlled by
+`eggfm_diffmap.metric_mode`:
+
+- **`"euclidean"`** — standard Euclidean distances on `geometry_source`
+  coordinates:
+  \[
+    d_{\text{Euc}}(x_i, x_j) = \lVert x_i - x_j \rVert_2.
+  \]
+
+- **`"scm"`** (scalar conformal metric) — a **scalar rescaling of Euclidean
+  distances** based on the learned energy \(E(x)\). A positive conformal field
+  \(G(x) > 0\) is constructed from clipped energy values, and edge lengths are
+  rescaled as
+  \[
+    d_{\text{SCM}}(x_i, x_j)
+      = \sqrt{\bar G_{ij}}\, \lVert x_i - x_j \rVert_2,
+  \]
+  where \(\bar G_{ij}\) is a symmetric average of \(G(x_i)\) and \(G(x_j)\).
+  The hyperparameters `metric_gamma`, `metric_lambda`, `energy_clip_abs`, and
+  `energy_batch_size` control how strongly high-energy regions are expanded
+  and low-energy regions are contracted. This yields a **scalar conformal
+  metric tensor**
+  \[
+    M(x) = G(x) I,
+  \]
+  which preserves local directions but warps distances according to the
+  EGGFM energy landscape.
+
+- **`"riem_tangent"`** — a **Riemannian metric aligned to the estimated local
+  tangent space**. For each cell, a local PCA on `geometry_source` neighbors
+  (controlled by `tangent_dim`, `tangent_k`, and `tangent_eps`) yields an
+  orthogonal decomposition into tangent and normal directions. Distances are
+  computed after projecting onto the tangent space, so that movement along the
+  manifold is favored and movement orthogonal to it is suppressed.
+
+- **`"riem_normal"`** — a **Riemannian metric with explicit normal-space
+  penalization**. The local covariance structure defines projectors
+  \(P_{\text{tan}}(x)\) and \(P_{\text{norm}}(x)\). The metric tensor is
+  of the form
+  \[
+    M(x) = P_{\text{tan}}(x)
+         + w_{\text{norm}} P_{\text{norm}}(x),
+  \]
+  where `normal_weight` \(= w_{\text{norm}}\) controls how costly it is to
+  leave the manifold, and `normal_k` controls the neighborhood used to estimate
+  the normal space. This encourages diffusion to stay close to the inferred
+  low-dimensional manifold while still allowing limited exploration.
+
+- **`"riem_curvature"`** — a **curvature-aware Riemannian metric**. Local
+  curvature is estimated from second-order structure around each cell using
+  neighborhoods of size `curvature_k`. The `curvature_scale` parameter rescales
+  this curvature contribution before it is folded into the metric tensor, so
+  that trajectories through high-curvature regions can be selectively
+  stretched or compressed. This mode is designed to better respect **branching
+  and bending trajectories** in hematopoietic differentiation by making
+  diffusion sensitive to curvature of the learned manifold.
+
+Euclidean and SCM metrics operate directly on the chosen `geometry_source` (e.g.
+PCA coordinates), while the Riemannian modes use local PCA and neighborhood
+structure to approximate a smoothly varying metric tensor over the cell-state
+manifold. All modes ultimately produce edge weights for the diffusion kernel,
+which is then diagonalized to obtain diffusion components.
+
+---
+
+### 6.3 Build an EGGFM-based diffusion embedding
 
 Once the EGGFM checkpoint exists, construct a diffusion embedding that uses the
 learned energy as a geometry prior:
@@ -285,7 +376,8 @@ This will:
 2. Load the EGGFM checkpoint and rebuild `EnergyMLP`.
 3. Construct an `EGGFMDiffusionEngine` from `medit.diffusion`.
 4. Compute a diffusion map (or similar embedding) over `weinreb_qc` using the
-   chosen metric (e.g. SCM or Euclidean) and the energy model.
+   chosen metric (SCM, Euclidean, or one of the Riemannian modes) and the
+   energy model.
 5. Attach the embedding as `ad.obsm["X_eggfm_diffmap"]`.
 6. Write the resulting AnnData to:
 
@@ -304,7 +396,7 @@ print("embedding shape:", ad.obsm["X_eggfm_diffmap"].shape)
 
 ---
 
-### 6.3 PCA vs EGGFM embeddings (optional comparison)
+### 6.4 PCA vs EGGFM embeddings (optional comparison)
 
 For quick side-by-side comparisons of PCA-based and EGGFM-based diffusion
 embeddings on a subsample of cells, use `scripts/embedding.py`:
@@ -317,7 +409,8 @@ This will:
 
 1. Subsample `n_cells_sample` cells from `weinreb_qc.h5ad`.
 2. Compute PCA (default 50 components), then a Scanpy diffusion map on `X_pca`.
-3. Build an EGGFM-based diffusion embedding using the same diffusion settings.
+3. Build an EGGFM-based diffusion embedding using the same diffusion settings
+   and chosen `metric_mode`.
 4. Store both embeddings in:
 
    ```text
@@ -329,5 +422,6 @@ with keys:
 - `ad.obsm["X_diff_pca"]` — PCA → Diffmap embedding  
 - `ad.obsm["X_diff_eggfm"]` — EGGFM-based diffusion embedding  
 
-These can be used for downstream clustering, visualization, or ARI-based
-comparisons.
+These embeddings can be used for downstream clustering, visualization, or
+trajectory-inference benchmarks (e.g. pseudotime–time correlations, fate
+branching metrics, and ARI-based comparisons).

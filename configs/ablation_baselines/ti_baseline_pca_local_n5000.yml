@@ -1,0 +1,16 @@
+ti_eval:
+  ad_path: data/embedding/weinreb_pca_local_n5000.h5ad
+  embedding_key: X_pca
+  time_key: Time point
+  cluster_key: Cell type annotation
+  fate_key: null
+  baseline_embedding_key: null
+  root_mask_key: null
+  n_neighbors: 30
+  n_dcs: 10
+  max_cells: 5000
+  out_dir: out/metrics/ti
+eggfm_diffmap:
+  metric_mode: baseline_pca
+run_id: weinreb_pca_local__X_pca
+base_run_id: weinreb_pca_local__X_pca

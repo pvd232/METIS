@@ -23,46 +23,33 @@ class RiemannianConfig:
 
 @dataclass
 class DiffusionConfig:
-    """
-    Config for EGGFM-based diffusion maps.
-
-    Mirrors the `eggfm_diffusion` (or `eggfm_diffmap`) block in configs/params.yml.
-    """
-    # geometry / energy views
     geometry_source: GeometrySource = "pca"
     energy_source: EnergySource = "hvg"
-
-    # kNN graph
+    metric_mode: MetricMode = "scm"
     n_neighbors: int = 30
-
-    # metric choice
-    metric_mode: MetricMode = "hessian_mixed"
-    norm_type: str = "l2"
-
-    # diffusion map parameters
     n_comps: int = 30
-    t: float = 1.0
-    eps_trunc: str | None = None  # "yes" or None
+    device: str = "auto"
+    hvp_batch_size: int = 8192
+    eps_trunc: str = "no"
+    t: float = 3.0
+    norm_type: NormType = "l2"
 
-    # Hessian / SCM hyperparams (only used if relevant)
-    metric_gamma: float = 0.2
-    metric_lambda: float = 4.0
-    energy_batch_size: int = 2048
-    energy_clip_abs: float = 3.0
+    # NEW
+    distance_power: float = 1.0
 
-    hessian_mix_mode: str = "multiplicative"
-    hessian_mix_alpha: float = 0.3
-    hessian_beta: float = 0.3
-    hessian_clip_std: float = 2.0
+    metric_gamma: float = 5.0
+    metric_lambda: float = 20.0
+    energy_clip_abs: float = 6.0
+    energy_batch_size: int = 8192
+    hessian_mix_mode: HessianMixMode = "multiplicative"
+    hessian_mix_alpha: float = 0.5
+    hessian_beta: float = 1.0
+    hessian_clip_std: float = 1.0
     hessian_use_neg: bool = True
-    hvp_batch_size: int = 1024
-    
     tangent_k: int = 30
     tangent_dim: int = 5
     normal_k: int = 30
     normal_dim: int = 5
-
-    # device
     device: str = "auto"  # "auto", "cuda", "cpu"
 
     def resolve_device(self) -> str:
