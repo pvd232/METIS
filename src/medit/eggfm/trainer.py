@@ -306,9 +306,7 @@ class EnergyTrainer:
         epochs_per_step = max(self.cfg.num_epochs // n_steps, 1)
 
         for step in range(n_steps):
-            if n_steps == 1:
-                self._set_uniform_loader()
-            else:
+            if n_steps > 1:
                 self._set_weighted_loader(step, n_steps)
 
             print(f"[Energy DSM] Refinement step {step+1}/{n_steps}", flush=True)
