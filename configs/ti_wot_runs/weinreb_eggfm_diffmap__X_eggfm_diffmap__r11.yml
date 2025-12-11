@@ -1,0 +1,23 @@
+seed: 11
+eggfm_train:
+  sigma: 0.15
+  lr: 0.005
+  batch_size: 8192
+  riemann_reg_type: hess_smooth
+  riemann_reg_weight: 0.1
+eggfm_diffmap: {}
+ti_eval:
+  ad_path: data/embedding/weinreb_eggfm_diffmap.h5ad
+  embedding_key: X_eggfm_diffmap
+  time_key: Time point
+  cluster_key: Cell type annotation
+  fate_key: null
+  baseline_embedding_key: null
+  root_mask_key: null
+  n_neighbors: 30
+  n_dcs: 10
+  max_cells: 60000
+  out_dir: out/metrics/ti
+  run_id: weinreb_eggfm_diffmap__X_eggfm_diffmap__r11
+  base_run_id: weinreb_eggfm_diffmap__X_eggfm_diffmap
+  metric_mode: scm

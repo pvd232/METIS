@@ -32,7 +32,7 @@ import pandas as pd
 import scanpy as sc  # type: ignore
 import yaml
 
-from medit.ti.eval import evaluate_embedding_for_ti
+from medit.ti import evaluate_embedding_for_ti
 
 
 # -----------------------------
@@ -213,12 +213,12 @@ def main() -> None:
         max_cells: Optional[int] = None
     else:
         max_cells = int(max_cells_raw)
-        if max_cells > 60000:
-            print(
-                f"[TI] max_cells from config = {max_cells} > 60000; "
-                f"clipping to 60000"
-            )
-            max_cells = 60000
+        # if max_cells > 120000:
+        #     print(
+        #         f"[TI] max_cells from config = {max_cells} > 60000; "
+        #         f"clipping to 60000"
+        #     )
+        #     max_cells = 60000
 
     out_dir = Path(ti_cfg.get("out_dir", "out/metrics/ti"))
 

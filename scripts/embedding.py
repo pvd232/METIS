@@ -1,31 +1,30 @@
 #!/usr/bin/env python3
 # scripts/embedding.py
 """
-PCA→Diffmap and EGGFM→Diffmap dimension reductions for a QC AnnData.
+EGGFM → Diffmap dimension reduction for a QC AnnData.
 
-This script compares:
-  - classical PCA → diffusion map
-  - EGGFM-based diffusion map (using an energy prior)
+This script builds an EGGFM-based diffusion map embedding (no PCA baselines)
+using a trained EnergyMLP prior and a DiffusionConfig from params.yml.
 
 It:
   - optionally subsamples cells for speed (with a hard cap of 60000)
-  - computes PCA (if missing) and a PCA-based diffusion map
-  - builds an EGGFM-based diffusion embedding via `EGGFMDiffusionEngine`
+  - builds an EGGFM-based diffusion embedding via `build_diffusion_embedding_from_config`
   - stores:
-      * X_pca          (PCA embedding)
-      * X_diff_pca     (PCA-based diffusion map, first k dims)
-      * X_eggfm_diffmap (full EGGFM-based diffusion embedding)
-      * X_diff_eggfm   (first k dims of EGGFM diffusion embedding)
-  - writes two .h5ad files inside the embedding output directory:
-      * weinreb_eggfm_diffmap.h5ad   (full AnnData with all views)
-      * weinreb_pca_diffmap.h5ad     (PCA→Diffmap views only)
+      * X_eggfm_diffmap  (full EGGFM-based diffusion embedding)
+      * X_diff_eggfm     (first k dims of EGGFM diffusion embedding)
+  - writes .h5ad files inside the embedding output directory:
+      * weinreb_eggfm_diffmap.h5ad
+      * weinreb_eggfm_diffmap_<regime>_n<N>.h5ad
+        where <regime> ∈ {global, meso, local} based on n_cells_sample
+  - ALSO writes the effective YAML config for this embedding to:
+      * configs/ablation_runs/embedding_eggfm_diffmap_<regime>_n<N>.yml
 
 Config block (in configs/params.yml):
 
 embedding:
   ad_path: data/interim/weinreb_qc.h5ad
   energy_ckpt: out/models/eggfm/eggfm_energy_weinreb.pt
-  out_dir: data/interim/embedding
+  out_dir: data/embedding
   k: 30
   n_neighbors: 30
   n_cells_sample: 0   # 0 or missing => use all cells (subject to hard cap)
@@ -54,45 +53,15 @@ from medit.diffusion.config import diffusion_config_from_params
 from medit.diffusion.embed import build_diffusion_embedding_from_config
 
 
-def build_pca_diffmap(
-    ad: sc.AnnData,
-    k: int,
-    n_neighbors: int,
-) -> None:
-    """
-    Classical PCA → Diffmap.
-
-    Populates:
-      - ad.obsm["X_pca"]       (if missing)
-      - ad.obsm["X_diff_pca"]  (first k diffusion components)
-    """
-    # PCA (compute if missing)
-    if "X_pca" not in ad.obsm:
-        n_comps = max(k, 30)
-        print(f"[EMBEDDING] Computing PCA with n_comps={n_comps}", flush=True)
-        sc.pp.scale(ad, max_value=10)
-        sc.pp.pca(ad, n_comps=n_comps)
-    else:
-        print("[EMBEDDING] Using existing X_pca", flush=True)
-
-    # Diffusion map on PCA space
-    print(
-        f"[EMBEDDING] PCA → Diffmap (n_neighbors={n_neighbors}, k={k})",
-        flush=True,
-    )
-    sc.pp.neighbors(ad, n_neighbors=n_neighbors, use_rep="X_pca")
-    sc.tl.diffmap(ad, n_comps=k)
-
-    X_diff_pca = ad.obsm["X_diffmap"][:, :k].copy()
-    ad.obsm["X_diff_pca"] = X_diff_pca
-    # Keep Scanpy's X_diffmap around; it can be useful later.
-
+# ---------------------------------------------------------------------------
+# Subsampling helpers
+# ---------------------------------------------------------------------------
 
 def maybe_subsample_with_cap(
     ad_full: sc.AnnData,
     n_cells_sample: int,
     seed: int,
-    hard_cap: int = 60000,
+    hard_cap: int = 130800,
 ) -> sc.AnnData:
     """
     Optionally subsample cells for faster experimentation, with a hard cap.
@@ -128,10 +97,37 @@ def maybe_subsample_with_cap(
     return ad
 
 
+def infer_regime(n_cells_sample: int, n_cells_actual: int, hard_cap: int = 130800) -> str:
+    """
+    Infer a regime label similar to the PCA baselines (global/meso/local).
+
+    - global: n_cells_sample <= 0 (i.e. 'all up to cap') or >= hard_cap
+    - meso:   15000 <= n_cells_sample < hard_cap
+    - local:  5000  <= n_cells_sample < 15000
+    - otherwise: return a generic 'sub<N>' label
+    """
+    if n_cells_sample <= 0 or n_cells_sample >= hard_cap:
+        return "global"
+    if n_cells_sample >= 15000:
+        return "meso"
+    if n_cells_sample >= 5000:
+        return "local"
+    return f"sub{n_cells_actual}"
+
+
+# Directory for saving embedding configs
+ABLAT_RUN_DIR = Path("configs/ablation_runs")
+ABLAT_RUN_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main() -> None:
     # ---------- CLI: only params path ----------
     p = argparse.ArgumentParser(
-        description="PCA→Diffmap and EGGFM→Diffmap dimension reductions."
+        description="EGGFM→Diffmap dimension reductions (no PCA baselines)."
     )
     p.add_argument(
         "--params",
@@ -146,10 +142,11 @@ def main() -> None:
 
     ad_path = Path(emb_cfg["ad_path"])
     energy_ckpt = Path(emb_cfg["energy_ckpt"])
-    out_dir = Path(emb_cfg.get("out_dir", "data/interim/embedding"))
+    out_dir = Path(emb_cfg.get("out_dir", "data/embedding"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     k = int(emb_cfg.get("k", 30))
+    # n_neighbors kept for transparency; diffusion config typically carries neighbors
     n_neighbors = int(emb_cfg.get("n_neighbors", 30))
     n_cells_sample = int(emb_cfg.get("n_cells_sample", 0))
     seed = int(emb_cfg.get("seed", 7))
@@ -176,7 +173,6 @@ def main() -> None:
     diff_cfg = diffusion_config_from_params(params, key=cfg_key)
     try:
         from dataclasses import asdict
-
         diff_cfg_dict = asdict(diff_cfg)
     except Exception:
         diff_cfg_dict = diff_cfg.__dict__
@@ -197,16 +193,17 @@ def main() -> None:
         ad_full=ad_full,
         n_cells_sample=n_cells_sample,
         seed=seed,
-        hard_cap=60000,
+        hard_cap=130800,
     )
+    n_cells_actual = ad.n_obs
     print(
-        f"[EMBEDDING] Using {ad.n_obs} cells for embedding "
+        f"[EMBEDDING] Using {n_cells_actual} cells for embedding "
         f"(total available={ad_full.n_obs})",
         flush=True,
     )
 
-    # ---------- PCA → Diffmap ----------
-    build_pca_diffmap(ad, k=k, n_neighbors=n_neighbors)
+    regime = infer_regime(n_cells_sample=n_cells_sample, n_cells_actual=n_cells_actual)
+    print(f"[EMBEDDING] Inferred regime: {regime}", flush=True)
 
     # ---------- EGGFM model ----------
     ckpt = torch.load(energy_ckpt, map_location="cpu", weights_only=False)
@@ -236,26 +233,62 @@ def main() -> None:
         obsm_key="X_eggfm_diffmap",
     )
 
-    # First k dims of EGGFM diffusion
+    # First k dims of EGGFM diffusion (analogous to X_diff_pca)
     X_diff_eggfm = ad.obsm["X_eggfm_diffmap"][:, :k].copy()
     ad.obsm["X_diff_eggfm"] = X_diff_eggfm
 
-    # ---------- write outputs ----------
-    pca_out = out_dir / "weinreb_pca_diffmap.h5ad"
+    # ---------- write outputs (.h5ad) ----------
+    # 1) Generic output (backwards-compatible with existing scripts)
     eggfm_out = out_dir / "weinreb_eggfm_diffmap.h5ad"
-
-    # PCA-only view
-    ad_pca_only = ad.copy()
-    keep_keys = ["X_pca", "X_diff_pca"]
-    ad_pca_only.obsm = {
-        k_: v for k_, v in ad_pca_only.obsm.items() if k_ in keep_keys
-    }
-    ad_pca_only.write_h5ad(pca_out)
-    print(f"[EMBEDDING] Wrote PCA Diffmap embedding AnnData to {pca_out}")
-
-    # Full EGGFM embedding (includes PCA + EGGFM views)
     ad.write_h5ad(eggfm_out)
     print(f"[EMBEDDING] Wrote EGGFM embedding AnnData to {eggfm_out}")
+
+    # 2) Regime-specific output, aligned with pca_global / pca_meso / pca_local style
+    regime_out = out_dir / f"weinreb_eggfm_diffmap_{regime}_n{n_cells_actual}.h5ad"
+    ad.write_h5ad(regime_out)
+    print(f"[EMBEDDING] Wrote regime-specific EGGFM embedding AnnData to {regime_out}")
+
+        # ---------- write effective YAML config ----------
+    run_id = f"weinreb_eggfm_diffmap_{regime}_n{n_cells_actual}"
+    params_to_save = dict(params)  # shallow copy is enough here
+
+    # Attach a small meta block so we can later link config ↔ embedding file
+    meta = {
+        "run_id": run_id,
+        "regime": regime,
+        "n_cells_actual": int(n_cells_actual),
+        "embedding_out": str(regime_out),
+        "energy_ckpt": str(energy_ckpt),
+        "cfg_key": cfg_key,
+    }
+    params_to_save["embedding_meta"] = meta
+
+    # --- Make the ti_eval block self-consistent with this embedding ---
+    ti_eval_cfg = params_to_save.get("ti_eval", {}) or {}
+    ti_eval_cfg.update(
+        {
+            "ad_path": str(regime_out),
+            "embedding_key": "X_eggfm_diffmap",
+            "time_key": ti_eval_cfg.get("time_key", "Time point"),
+            "cluster_key": ti_eval_cfg.get("cluster_key", "Cell type annotation"),
+            "fate_key": ti_eval_cfg.get("fate_key", None),
+            "baseline_embedding_key": ti_eval_cfg.get("baseline_embedding_key", None),
+            "root_mask_key": ti_eval_cfg.get("root_mask_key", None),
+            "n_neighbors": ti_eval_cfg.get("n_neighbors", 30),
+            "n_dcs": ti_eval_cfg.get("n_dcs", 10),
+            "max_cells": int(n_cells_actual),
+            "out_dir": ti_eval_cfg.get("out_dir", "out/metrics/ti"),
+        }
+    )
+    params_to_save["ti_eval"] = ti_eval_cfg
+
+    # Also put run_id / base_run_id at the top level like the baselines do
+    params_to_save["run_id"] = run_id
+    params_to_save["base_run_id"] = run_id
+
+    cfg_path = ABLAT_RUN_DIR / f"embedding_eggfm_diffmap_{regime}_n{n_cells_actual}.yml"
+    cfg_path.write_text(yaml.dump(params_to_save, sort_keys=False))
+    print(f"[EMBEDDING] Wrote embedding config to {cfg_path}")
 
 
 if __name__ == "__main__":
