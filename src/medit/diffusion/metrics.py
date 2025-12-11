@@ -87,7 +87,7 @@ def compute_scalar_conformal_field(
 
     # softer exponential to avoid insane G ranges
     G = metric_gamma + metric_lambda * np.exp(0.5 * E_clip)
-
+    
     if not np.isfinite(G).all():
         raise ValueError(
             "[EGGFM SCM] non-finite values in G after exp; check energy scaling."
@@ -105,6 +105,24 @@ def compute_scalar_conformal_field(
         f"min={G.min():.4f}, max={G.max():.4f}, mean={G.mean():.4f}",
         flush=True,
     )
+    print(
+    "[EGGFM SCM] E_norm: min={:.3f}, max={:.3f}, q1={:.3f}, q3={:.3f}".format(
+        E_norm.min(), E_norm.max(),
+        np.quantile(E_norm, 0.25),
+        np.quantile(E_norm, 0.75),
+    ),
+    flush=True,
+    )
+
+    print(
+    "[EGGFM SCM] G(x): min={:.3e}, max={:.3e}, q1={:.3e}, q3={:.3e}".format(
+        G.min(), G.max(),
+        np.quantile(G, 0.25),
+        np.quantile(G, 0.75),
+    ),
+    flush=True,
+    )
+
     return G
 
 # ---------- base class ----------

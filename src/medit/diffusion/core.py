@@ -7,20 +7,15 @@ from scipy.sparse.linalg import eigs
 
 
 class DiffusionMapBuilder:
-    """
-    Metric- and norm-agnostic diffusion map constructor.
-    """
-
     def __init__(self, diff_cfg: Dict[str, Any]):
         self.diff_cfg = diff_cfg
+
     def build_from_distances(
         self,
         n_cells: int,
         rows: np.ndarray,
         cols: np.ndarray,
-        dist_vals: np.ndarray,
-        return_kernel: bool = False,
-        return_eigvals: bool = False,
+        dist_vals: np.ndarray,        
     ):
         """
         Build diffusion coordinates from pairwise distances.
@@ -33,25 +28,42 @@ class DiffusionMapBuilder:
         """
         diff_cfg = self.diff_cfg
         n_comps = diff_cfg.get("n_comps", 30)
-        t = diff_cfg.get("t", 3.0)
-        distance_power = diff_cfg.get("distance_power", 1.0)
+        t = diff_cfg.get("t", 1.0)  # use same default as old version
+        p = float(diff_cfg.get("distance_power", 1.0))
 
-        # 1) kernel W
-        d_p = dist_vals ** distance_power
-        W = sparse.csr_matrix(
-            (np.exp(-d_p), (rows, cols)),
-            shape=(n_cells, n_cells),
-        )
+        # 1) distance transform
+        dist_p = dist_vals**p
 
-        # 2) Markov matrix P
+        eps = np.median(dist_p)
+        if eps <= 0:
+            eps = 1e-6
+        print(f"[DiffusionMap] using eps = {eps:.4g} (power p={p})", flush=True)
+
+        if diff_cfg.get("eps_trunc") == "yes":
+            q_low = np.quantile(dist_p, 0.05)
+            q_hi = np.quantile(dist_p, 0.98)
+            dist_p = np.clip(dist_p, q_low, q_hi)
+            print(
+                f"[DiffusionMap] eps_trunc=yes, clipped d^p to [{q_low:.4g}, {q_hi:.4g}]",
+                flush=True,
+            )
+
+        # 2) kernel W
+        W_vals = np.exp(-dist_p / eps)
+        W = sparse.csr_matrix((W_vals, (rows, cols)), shape=(n_cells, n_cells))
+        W = 0.5 * (W + W.T)
+
+        # 3) Markov matrix P
         d = np.array(W.sum(axis=1)).ravel()
-        d_safe = np.where(d > 0, d, 1.0)
+        d_safe = np.maximum(d, 1e-12)
         D_inv = sparse.diags(1.0 / d_safe)
         P = D_inv @ W
 
-        # 3) eigen-decomp
+        # 4) eigen-decomp
         k_eigs = n_comps + 1
+        print("[DiffusionMap] computing eigenvectors...", flush=True)
         eigvals, eigvecs = eigs(P.T, k=k_eigs, which="LR")
+
         eigvals = eigvals.real
         eigvecs = eigvecs.real
 
@@ -64,12 +76,8 @@ class DiffusionMapBuilder:
 
         diff_coords = phis * (lambdas**t)
         diff_coords = diff_coords.astype(np.float32)
+        print("[DiffusionMap] finished. Embedding shape:", diff_coords.shape, flush=True)
 
-        # --- Backwards-compatible return shape ---
-        if not (return_kernel or return_eigvals):
-            # Old behavior: only embedding
-            return diff_coords
-
-        kernel_out = P if return_kernel else None
-        eig_out = lambdas if return_eigvals else None
+        kernel_out = P 
+        eig_out = lambdas
         return diff_coords, kernel_out, eig_out

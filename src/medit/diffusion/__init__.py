@@ -25,4 +25,4 @@ from .metrics import (
 )
 
 from .admr import AlternatingDiffuser  
-from .embed import build_diffusion_embedding_from_config
+from .embed import build_eggfm_geometry_from_config

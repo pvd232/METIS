@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.neighbors import NearestNeighbors
 import torch
 import scanpy as sc
+from scipy import sparse
 
 from medit.eggfm.models import EnergyMLP
 from .data_sources import AnnDataViewProvider
@@ -132,10 +133,25 @@ class EGGFMDiffusionEngine:
 
         # diffusion map
         builder = DiffusionMapBuilder(diff_cfg)
-        diff_coords = builder.build_from_distances(
+        diff_coords, P, eigvals = builder.build_from_distances(
             n_cells=n_cells,
             rows=rows,
             cols=cols,
             dist_vals=dist_vals,
         )
-        return diff_coords
+            
+        # distances in metric space (symmetrized)
+        dist_mat = sparse.csr_matrix(
+            (dist_vals, (rows, cols)),
+            shape=(n_cells, n_cells),
+        )
+        dist_mat = 0.5 * (dist_mat + dist_mat.T)
+        ad_prep.obsp["distances"] = dist_mat
+
+        # simple connectivity: 1 for each edge, symmetrized
+        conn = dist_mat.copy()
+        conn.data = np.ones_like(conn.data, dtype=np.float32)
+        ad_prep.obsp["connectivities"] = conn
+            
+        return diff_coords, P, eigvals
+        

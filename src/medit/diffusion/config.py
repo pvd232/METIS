@@ -58,14 +58,6 @@ class DiffusionConfig:
         import torch
         return "cuda" if torch.cuda.is_available() else "cpu"
 
-
-@dataclass
-class EGGFMGeomConfig:
-    diff: DiffusionConfig
-    store_kernel: bool = False     # whether to return P
-    store_eigvals: bool = True     # cache eigenvalues
-    store_knn: bool = True         # knn_indices, knn_distances
-
 def diffusion_config_from_params(
     params: Mapping[str, Any],
     key: str = "eggfm_diffmap",   # ← match your params.yml

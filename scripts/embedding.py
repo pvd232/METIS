@@ -8,7 +8,7 @@ using a trained EnergyMLP prior and a DiffusionConfig from params.yml.
 
 It:
   - optionally subsamples cells for speed (with a hard cap of 60000)
-  - builds an EGGFM-based diffusion embedding via `build_diffusion_embedding_from_config`
+  - builds an EGGFM-based diffusion embedding via `build_eggfm_geometry_from_config`  
   - stores:
       * X_eggfm_diffmap  (full EGGFM-based diffusion embedding)
       * X_diff_eggfm     (first k dims of EGGFM diffusion embedding)
@@ -49,8 +49,8 @@ import scanpy as sc  # type: ignore
 
 from medit.eggfm.models import EnergyMLP
 from medit.eggfm.config import EnergyModelConfig
-from medit.diffusion.config import diffusion_config_from_params
-from medit.diffusion.embed import build_diffusion_embedding_from_config
+from medit.diffusion.config import diffusion_config_from_params  # <<< CHANGED (removed EGGFMGeomConfig)
+from medit.diffusion.embed import build_eggfm_geometry_from_config  # unchanged
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +152,9 @@ def main() -> None:
     seed = int(emb_cfg.get("seed", 7))
     cfg_key = emb_cfg.get("cfg_key", "eggfm_diffmap")
 
+    # NOTE: store_kernel / store_eigvals / store_knn are no longer needed,
+    # because we always store everything in the geometry builder.          # <<< CHANGED (conceptual)
+
     # ---------- echo resolved embedding config ----------
     print("[EMBEDDING] Resolved embedding config (from params.yml):", flush=True)
     print(f"  ad_path        = {ad_path}", flush=True)
@@ -226,10 +229,12 @@ def main() -> None:
 
     # ---------- EGGFM → Diffmap ----------
     print("[EMBEDDING] Building EGGFM-based diffusion embedding", flush=True)
-    ad = build_diffusion_embedding_from_config(
+
+    # Directly pass the diffusion config into the geometry builder         
+    ad = build_eggfm_geometry_from_config(
         ad=ad,
         energy_model=energy_model,
-        diff_cfg=diff_cfg,
+        diff_cfg=diff_cfg,            
         obsm_key="X_eggfm_diffmap",
     )
 
@@ -248,7 +253,7 @@ def main() -> None:
     ad.write_h5ad(regime_out)
     print(f"[EMBEDDING] Wrote regime-specific EGGFM embedding AnnData to {regime_out}")
 
-        # ---------- write effective YAML config ----------
+    # ---------- write effective YAML config ----------                      
     run_id = f"weinreb_eggfm_diffmap_{regime}_n{n_cells_actual}"
     params_to_save = dict(params)  # shallow copy is enough here
 

@@ -19,7 +19,7 @@ eggfm_model:
 
 eggfm_train:
   batch_size: 8192
-  num_epochs: 75
+  num_epochs: 50
   lr: 4.0e-3
   sigma: 0.15
   device: "cuda"
@@ -29,12 +29,12 @@ eggfm_train:
   n_cells_sample: 0
 
   riemann_reg_type: "hess_smooth"
-  riemann_reg_weight: 0.1
+  riemann_reg_weight: 0.05
   riemann_eps: 0.01
   riemann_n_dirs: 4
 
   # Iterative density refinement
-  n_refinement_steps: 1
+  n_refinement_steps: 2
   refinement_n_clusters: 32
   refinement_beta_start: 0.0
   refinement_beta_end: 1.0
@@ -58,7 +58,7 @@ eggfm_diffmap:
   # SCM hyperparams
   metric_gamma: 1.0
   metric_lambda: 40.0
-  energy_clip_abs: 12.0
+  # energy_clip_abs: 12.0
   energy_batch_size: 8192
 
   # Riemannian geometry hyperparams
@@ -81,6 +81,7 @@ embedding:
   n_cells_sample: 130800
   seed: 7
   cfg_key: eggfm_diffmap
+
 
 ti_eval:
   ad_path: data/embedding/weinreb_eggfm_diffmap.h5ad

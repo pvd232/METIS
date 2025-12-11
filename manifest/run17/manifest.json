@@ -1,0 +1,41 @@
+{
+  "run_id": "run17",
+  "timestamp": "2025-12-11T22:29:04",
+  "git_commit": "423c454cc6a53216711f14352c8522baf4a7bafc",
+  "model_cfg": {
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "latent_dim": 64
+  },
+  "train_cfg": {
+    "batch_size": 8192,
+    "num_epochs": 50,
+    "lr": 0.004,
+    "sigma": 0.15,
+    "weight_decay": 0.0,
+    "max_grad_norm": 5.0,
+    "early_stop_patience": 5,
+    "early_stop_min_delta": 0.0,
+    "device": "cuda",
+    "n_cells_sample": 0,
+    "latent_space": "pca",
+    "riemann_reg_weight": 0.0,
+    "riemann_reg_type": "hess_smooth",
+    "riemann_eps": 0.01,
+    "riemann_n_dirs": 4,
+    "n_refinement_steps": 3,
+    "refinement_n_clusters": 32,
+    "refinement_beta_start": 0.0,
+    "refinement_beta_end": 1.0,
+    "refinement_energy_clip": 6.0,
+    "refinement_weight_floor": 0.001
+  },
+  "data": {
+    "n_cells": 130880,
+    "n_genes": 2000
+  }
+}

@@ -297,22 +297,26 @@ class EnergyTrainer:
         )
     # ------------------------------------------------------------------
     def train(self) -> EnergyMLP:
-        best_loss = float("inf")
-        best_state = None
-        patience = 0
-        
-         # Fallback to 1 if the field is missing
+        # Global best across all refinement steps
+        best_loss_global = float("inf")
+        best_state_global = None
+
         n_steps = max(int(getattr(self.cfg, "n_refinement_steps", 1)), 1)
         epochs_per_step = max(self.cfg.num_epochs // n_steps, 1)
 
         for step in range(n_steps):
-            if n_steps > 1:
+            # --- reset patience + step-local best here ---
+            patience = 0
+            best_loss_step = float("inf")
+
+            if n_steps == 1:
+                self._set_uniform_loader()
+            else:
                 self._set_weighted_loader(step, n_steps)
 
             print(f"[Energy DSM] Refinement step {step+1}/{n_steps}", flush=True)
-            
+
             for local_epoch in range(epochs_per_step):
-                # Optional: global epoch index, if you want consistent logging
                 global_epoch = step * epochs_per_step + local_epoch
 
                 epoch_loss = 0.0
@@ -320,17 +324,14 @@ class EnergyTrainer:
 
                 for batch in self.loader:
                     batch = batch.to(self.device)
-
                     self.optimizer.zero_grad()
 
-                    # DSM loss
                     loss = _dsm_loss(
                         model=self.model,
                         x=batch,
                         sigma=self.cfg.sigma,
                     )
 
-                    # Riemannian regularizer
                     if self.riem_weight > 0.0 and self.riem_type != "none":
                         if self.riem_type == "hess_smooth":
                             reg = hessian_smoothness_penalty(
@@ -345,7 +346,6 @@ class EnergyTrainer:
 
                     loss.backward()
 
-                    # grad clipping
                     if self.cfg.max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(
                             self.model.parameters(),
@@ -365,35 +365,33 @@ class EnergyTrainer:
                     flush=True,
                 )
 
-                # early stopping
-                if epoch_loss < best_loss - self.cfg.early_stop_min_delta:
-                    best_loss = epoch_loss
-                    best_state = {
-                        k: v.detach().cpu().clone()
-                        for k, v in self.model.state_dict().items()
-                    }
+                # --- step-local early stopping logic ---
+                if epoch_loss < best_loss_step - self.cfg.early_stop_min_delta:
+                    best_loss_step = epoch_loss
                     patience = 0
                 else:
                     patience += 1
+
+                # --- global best checkpointing ---
+                if epoch_loss < best_loss_global:
+                    best_loss_global = epoch_loss
+                    best_state_global = {
+                        k: v.detach().cpu().clone()
+                        for k, v in self.model.state_dict().items()
+                    }
 
                 if (
                     self.cfg.early_stop_patience > 0
                     and patience >= self.cfg.early_stop_patience
                 ):
-                    print(f"[Energy DSM] Early stop at epoch {global_epoch+1}")
-                    break
+                    print(f"[Energy DSM] Early stop within step {step+1} at epoch {global_epoch+1}")
+                    break  # stop this refinement step, but still proceed to next step
 
-            # propagate early stop out of refinement loop
-            if (
-                self.cfg.early_stop_patience > 0
-                and patience >= self.cfg.early_stop_patience
-            ):
-                break
-
-        if best_state is not None:
-            self.model.load_state_dict(best_state)
+        if best_state_global is not None:
+            self.model.load_state_dict(best_state_global)
 
         return self.model
+
 
 def train_energy_model(
     ad_prep: sc.AnnData,

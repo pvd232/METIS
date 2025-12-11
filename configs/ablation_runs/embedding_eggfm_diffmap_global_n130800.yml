@@ -19,8 +19,8 @@ eggfm_model:
   latent_dim: 64
 eggfm_train:
   batch_size: 8192
-  num_epochs: 50
-  lr: 0.005
+  num_epochs: 100
+  lr: 0.002
   sigma: 0.15
   device: cuda
   latent_space: pca
@@ -28,9 +28,15 @@ eggfm_train:
   early_stop_min_delta: 0.0
   n_cells_sample: 0
   riemann_reg_type: hess_smooth
-  riemann_reg_weight: 0.1
+  riemann_reg_weight: 0.05
   riemann_eps: 0.01
   riemann_n_dirs: 4
+  n_refinement_steps: 5
+  refinement_n_clusters: 32
+  refinement_beta_start: 0.0
+  refinement_beta_end: 1.0
+  refinement_energy_clip: 6.0
+  refinement_weight_floor: 0.001
 eggfm_diffmap:
   geometry_source: pca
   energy_source: hvg
@@ -45,8 +51,7 @@ eggfm_diffmap:
   norm_type: l2
   metric_gamma: 1.0
   metric_lambda: 40.0
-  energy_clip_abs: 12.0
-  energy_batch_size: 4096
+  energy_batch_size: 8192
   tangent_dim: 10
   tangent_eps: 0.01
   tangent_k: 30

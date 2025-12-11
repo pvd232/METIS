@@ -23,4 +23,4 @@ from medit.diffusion import (
     # AlternatingDiffuser,  # uncomment only if you keep admr.py around
 )
 from medit.diffusion.config import DiffusionConfig, diffusion_config_from_params
-from medit.diffusion.embed import build_diffusion_embedding_from_config
+from medit.diffusion.embed import build_eggfm_geometry_from_config

@@ -42,9 +42,8 @@ except Exception:
 
 # Cell-count regimes, mirroring your EGGFM ablations
 CELL_REGIMES = {
-    "global": 60000,
-    "meso": 15000,
-    "local": 5000,
+    "super_global": 130800,
+
 }
 
 # Minimal ti_eval config template, matching your existing setup
